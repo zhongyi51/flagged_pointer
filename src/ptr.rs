@@ -27,7 +27,7 @@ where
 
 pub mod ptr_impl {
     use core::slice;
-    use std::{mem, num::NonZeroUsize, ptr::NonNull, rc::Rc, sync::Arc};
+    use std::{mem, num::NonZeroUsize, ptr::{self, NonNull}, rc::Rc, sync::Arc};
 
     use ptr_meta::DynMetadata;
 
@@ -108,9 +108,8 @@ pub mod ptr_impl {
         }
 
         unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
-            let ptr = unsafe {
-                slice::from_raw_parts_mut(NonZeroUsize::get(nz) as *mut T, meta) as *mut [T]
-            };
+            let ptr = 
+                ptr::slice_from_raw_parts_mut(NonZeroUsize::get(nz) as *mut T, meta);
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
@@ -226,8 +225,8 @@ pub mod ptr_impl {
 
         unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *mut T;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, meta) };
-            unsafe { NonNull::new_unchecked(slice as *mut [T]) }
+            let slice = ptr::slice_from_raw_parts_mut(ptr, meta);
+            unsafe { NonNull::new_unchecked(slice) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
@@ -380,8 +379,8 @@ pub mod ptr_impl {
 
         unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *const T;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, meta) };
-            unsafe { NonNull::new_unchecked(slice as *mut [T]) }
+            let slice = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
+            unsafe { NonNull::new_unchecked(slice) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
@@ -420,8 +419,8 @@ pub mod ptr_impl {
 
         unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *const T;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, meta) };
-            unsafe { NonNull::new_unchecked(slice as *mut [T]) }
+            let slice = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
+            unsafe { NonNull::new_unchecked(slice) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
