@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroUsize,
-    ops::{Deref, DerefMut},
-};
+use std::{num::NonZeroUsize, ops::Deref, ptr::NonNull};
 
 /// Metadata for the pointer.
 pub unsafe trait PtrMeta<M>
@@ -21,26 +18,39 @@ where
 
     unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: M) -> Self;
 
-    unsafe fn map_pointee(nz: NonZeroUsize, meta: M) -> *const Self::Pointee
-    where
-        Self: Deref<Target = Self::Pointee>;
-
-    unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: M) -> *mut Self::Pointee
-    where
-        Self: DerefMut<Target = Self::Pointee>;
+    unsafe fn map_pointee(nz: NonZeroUsize, meta: M) -> NonNull<Self::Pointee>;
 
     unsafe fn clone_storage(nz: NonZeroUsize, meta: &M) -> Self
     where
         Self: Clone;
 }
 
-mod ptr_impl {
+pub mod ptr_impl {
     use core::slice;
     use std::{mem, num::NonZeroUsize, ptr::NonNull, rc::Rc, sync::Arc};
 
     use ptr_meta::DynMetadata;
 
     use crate::ptr::PtrMeta;
+
+    pub struct WithMaskMeta<T>
+    where
+        T: ?Sized,
+    {
+        pub(crate) data: DynMetadata<T>,
+        pub(crate) mask: usize,
+    }
+
+    impl<T> Clone for WithMaskMeta<T>
+    where
+        T: ?Sized,
+    {
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<T> Copy for WithMaskMeta<T> where T: ?Sized {}
 
     unsafe impl<T> PtrMeta<()> for NonNull<T> {
         const USED_PTR_BITS_MASK: usize = {
@@ -62,18 +72,9 @@ mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
-            unreachable!("NonNull does not support map pointee")
-        }
-
-        unsafe fn map_pointee_mut(nz: std::num::NonZeroUsize, meta: ()) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            unreachable!("NonNull does not support map pointee mut")
+        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> NonNull<Self::Pointee> {
+            let ptr = NonZeroUsize::get(nz) as *mut T;
+            unsafe { NonNull::new_unchecked(ptr) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &()) -> Self
@@ -106,18 +107,11 @@ mod ptr_impl {
             Self::from_mut(slice)
         }
 
-        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: usize) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
-            unreachable!("NonNull does not support map pointee")
-        }
-
-        unsafe fn map_pointee_mut(nz: std::num::NonZeroUsize, meta: usize) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            unreachable!("NonNull does not support map pointee mut")
+        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
+            let ptr = unsafe {
+                slice::from_raw_parts_mut(NonZeroUsize::get(nz) as *mut T, meta) as *mut [T]
+            };
+            unsafe { NonNull::new_unchecked(ptr) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
@@ -128,7 +122,7 @@ mod ptr_impl {
         }
     }
 
-    unsafe impl<T> PtrMeta<DynMetadata<T>> for NonNull<T>
+    unsafe impl<T> PtrMeta<WithMaskMeta<T>> for NonNull<T>
     where
         T: ?Sized + ptr_meta::Pointee<Metadata = DynMetadata<T>>,
     {
@@ -137,37 +131,32 @@ mod ptr_impl {
 
         type Pointee = T;
 
-        fn mask(meta: &DynMetadata<T>) -> usize {
+        fn mask(meta: &WithMaskMeta<T>) -> usize {
+            meta.mask
+        }
+
+        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, WithMaskMeta<T>) {
+            let (ptr, meta) = ptr_meta::to_raw_parts(self.as_ptr());
             let align = meta.align_of();
             let align_bits = align.ilog2() as usize;
-            usize::MAX << align_bits
+            let mask = usize::MAX << align_bits;
+            (
+                NonZeroUsize::new(ptr as usize).unwrap(),
+                WithMaskMeta { data: meta, mask },
+            )
         }
 
-        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, DynMetadata<T>) {
-            let (ptr, meta) = ptr_meta::to_raw_parts(self.as_ptr());
-            (NonZeroUsize::new(ptr as usize).unwrap(), meta)
-        }
-
-        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: DynMetadata<T>) -> Self {
+        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> Self {
             let ptr = NonZeroUsize::get(nz) as *mut ();
-            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta)) }
+            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: DynMetadata<T>) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
-            unreachable!("NonNull does not support map pointee")
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
+            let ptr = NonZeroUsize::get(nz) as *mut ();
+            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: DynMetadata<T>) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            unreachable!("NonNull does not support map pointee mut")
-        }
-
-        unsafe fn clone_storage(nz: NonZeroUsize, meta: &DynMetadata<T>) -> Self
+        unsafe fn clone_storage(nz: NonZeroUsize, meta: &WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
@@ -195,20 +184,9 @@ mod ptr_impl {
             unsafe { Box::from_raw(ptr) }
         }
 
-        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *mut T;
-            unsafe { &*ptr }
-        }
-
-        unsafe fn map_pointee_mut(nz: std::num::NonZeroUsize, meta: ()) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *mut T;
-            unsafe { &mut *ptr }
+            unsafe { NonNull::new_unchecked(ptr) }
         }
 
         unsafe fn clone_storage(nz: std::num::NonZeroUsize, meta: &()) -> Self
@@ -246,22 +224,10 @@ mod ptr_impl {
             unsafe { Box::from_raw(slice) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *mut T;
-            let slice = unsafe { std::slice::from_raw_parts(ptr, meta) };
-            slice
-        }
-
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: usize) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *mut T;
             let slice = unsafe { std::slice::from_raw_parts_mut(ptr, meta) };
-            slice
+            unsafe { NonNull::new_unchecked(slice as *mut [T]) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
@@ -277,53 +243,48 @@ mod ptr_impl {
         }
     }
 
-    unsafe impl<T> PtrMeta<DynMetadata<T>> for Box<T>
+    unsafe impl<T> PtrMeta<WithMaskMeta<T>> for Box<T>
     where
         T: ?Sized + ptr_meta::Pointee<Metadata = DynMetadata<T>>,
     {
+        // We cannot determine the align of `T` at compile time, so we set it to 0.
         const USED_PTR_BITS_MASK: usize = { 0_usize };
 
         type Pointee = T;
 
-        fn mask(meta: &DynMetadata<T>) -> usize {
-            let align = meta.align_of();
-            let align_bits = align.ilog2() as usize;
-            usize::MAX << align_bits
+        fn mask(meta: &WithMaskMeta<T>) -> usize {
+            meta.mask
         }
 
-        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, DynMetadata<T>) {
+        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, WithMaskMeta<T>) {
             let ptr = Box::into_raw(self);
             let (raw_ptr, meta) = ptr_meta::to_raw_parts(ptr);
-            (NonZeroUsize::new(raw_ptr as usize).unwrap(), meta)
+            let align = meta.align_of();
+            let align_bits = align.ilog2() as usize;
+            let mask = usize::MAX << align_bits;
+            (
+                NonZeroUsize::new(raw_ptr as usize).unwrap(),
+                WithMaskMeta { data: meta, mask },
+            )
         }
 
-        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: DynMetadata<T>) -> Self {
+        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> Self {
             let ptr = NonZeroUsize::get(nz) as *mut ();
-            unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta)) }
+            unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: DynMetadata<T>) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *mut ();
-            ptr_meta::from_raw_parts(ptr, meta)
+            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: DynMetadata<T>) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *mut ();
-            ptr_meta::from_raw_parts_mut(ptr, meta)
-        }
-
-        unsafe fn clone_storage(nz: NonZeroUsize, meta: &DynMetadata<T>) -> Self
+        unsafe fn clone_storage(nz: NonZeroUsize, meta: &WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *mut ();
-            let boxed: Box<T> = unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, *meta)) };
+            let boxed: Box<T> =
+                unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data)) };
             let cloned = boxed.clone();
             mem::forget(boxed);
             cloned
@@ -348,29 +309,17 @@ mod ptr_impl {
             let ptr = NonZeroUsize::get(nz) as *mut T;
             unsafe { Rc::from_raw(ptr) }
         }
-        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *mut T;
-            unsafe { &*ptr }
-        }
-        unsafe fn map_pointee_mut(nz: std::num::NonZeroUsize, meta: ()) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *mut T;
-            unsafe { &mut *ptr }
+            unsafe { NonNull::new_unchecked(ptr) }
         }
         unsafe fn clone_storage(nz: std::num::NonZeroUsize, meta: &()) -> Self
         where
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *mut T;
-            let rc = unsafe { Rc::from_raw(ptr) };
-            let cloned = rc.clone();
-            mem::forget(rc);
-            cloned
+            unsafe { Rc::increment_strong_count(ptr) };
+            unsafe { Rc::from_raw(ptr) }
         }
     }
 
@@ -392,29 +341,17 @@ mod ptr_impl {
             let ptr = NonZeroUsize::get(nz) as *mut T;
             unsafe { Arc::from_raw(ptr) }
         }
-        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: std::num::NonZeroUsize, meta: ()) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *mut T;
-            unsafe { &*ptr }
-        }
-        unsafe fn map_pointee_mut(nz: std::num::NonZeroUsize, meta: ()) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *mut T;
-            unsafe { &mut *ptr }
+            unsafe { NonNull::new_unchecked(ptr) }
         }
         unsafe fn clone_storage(nz: std::num::NonZeroUsize, meta: &()) -> Self
         where
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *mut T;
-            let arc = unsafe { Arc::from_raw(ptr) };
-            let cloned = arc.clone();
-            mem::forget(arc);
-            cloned
+            unsafe { Arc::increment_strong_count(ptr) };
+            unsafe { Arc::from_raw(ptr) }
         }
     }
 
@@ -441,22 +378,10 @@ mod ptr_impl {
             unsafe { Rc::from_raw(slice) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *const T;
-            let slice = unsafe { std::slice::from_raw_parts(ptr, meta) };
-            slice
-        }
-
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: usize) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *const T;
             let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, meta) };
-            slice
+            unsafe { NonNull::new_unchecked(slice as *mut [T]) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
@@ -464,11 +389,9 @@ mod ptr_impl {
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *const T;
+            unsafe { Rc::increment_strong_count(ptr) };
             let slice = unsafe { std::slice::from_raw_parts(ptr, *meta) };
-            let rc = unsafe { Rc::from_raw(slice) };
-            let cloned = rc.clone();
-            mem::forget(rc);
-            cloned
+            unsafe { Rc::from_raw(slice) }
         }
     }
 
@@ -495,22 +418,10 @@ mod ptr_impl {
             unsafe { Arc::from_raw(slice) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *const T;
-            let slice = unsafe { std::slice::from_raw_parts(ptr, meta) };
-            slice
-        }
-
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: usize) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *const T;
             let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, meta) };
-            slice
+            unsafe { NonNull::new_unchecked(slice as *mut [T]) }
         }
 
         unsafe fn clone_storage(nz: NonZeroUsize, meta: &usize) -> Self
@@ -518,117 +429,103 @@ mod ptr_impl {
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *const T;
+            unsafe { Arc::increment_strong_count(ptr) };
             let slice = unsafe { std::slice::from_raw_parts(ptr, *meta) };
-            let arc = unsafe { Arc::from_raw(slice) };
-            let cloned = arc.clone();
-            mem::forget(arc);
-            cloned
+            unsafe { Arc::from_raw(slice) }
         }
     }
 
-    unsafe impl<T> PtrMeta<DynMetadata<T>> for Rc<T>
+    unsafe impl<T> PtrMeta<WithMaskMeta<T>> for Rc<T>
     where
         T: ?Sized + ptr_meta::Pointee<Metadata = DynMetadata<T>>,
     {
+        // We cannot determine the align of `T` at compile time, so we set it to 0.
         const USED_PTR_BITS_MASK: usize = { 0_usize };
 
         type Pointee = T;
 
-        fn mask(meta: &DynMetadata<T>) -> usize {
-            let align = meta.align_of();
-            let align_bits = align.ilog2() as usize;
-            usize::MAX << align_bits
+        fn mask(meta: &WithMaskMeta<T>) -> usize {
+            meta.mask
         }
 
-        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, DynMetadata<T>) {
+        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, WithMaskMeta<T>) {
             let ptr = Rc::into_raw(self);
             let (raw_ptr, meta) = ptr_meta::to_raw_parts(ptr);
-            (NonZeroUsize::new(raw_ptr as usize).unwrap(), meta)
+            let align = meta.align_of();
+            let align_bits = align.ilog2() as usize;
+            let mask = usize::MAX << align_bits;
+            (
+                NonZeroUsize::new(raw_ptr as usize).unwrap(),
+                WithMaskMeta { data: meta, mask },
+            )
         }
 
-        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: DynMetadata<T>) -> Self {
+        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> Self {
             let ptr = NonZeroUsize::get(nz) as *const ();
-            unsafe { Rc::from_raw(ptr_meta::from_raw_parts(ptr, meta)) }
+            unsafe { Rc::from_raw(ptr_meta::from_raw_parts(ptr, meta.data)) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: DynMetadata<T>) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *const ();
-            ptr_meta::from_raw_parts(ptr, meta)
+            unsafe {
+                NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr as *mut (), meta.data))
+            }
         }
 
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: DynMetadata<T>) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *const ();
-            ptr_meta::from_raw_parts_mut(ptr as *mut (), meta)
-        }
-
-        unsafe fn clone_storage(nz: NonZeroUsize, meta: &DynMetadata<T>) -> Self
+        unsafe fn clone_storage(nz: NonZeroUsize, meta: &WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *const ();
-            let rc: Rc<T> = unsafe { Rc::from_raw(ptr_meta::from_raw_parts(ptr, *meta)) };
-            let cloned = rc.clone();
-            mem::forget(rc);
-            cloned
+            unsafe { Rc::increment_strong_count(ptr) };
+            unsafe { Rc::from_raw(ptr_meta::from_raw_parts(ptr, meta.data)) }
         }
     }
 
-    unsafe impl<T> PtrMeta<DynMetadata<T>> for Arc<T>
+    unsafe impl<T> PtrMeta<WithMaskMeta<T>> for Arc<T>
     where
         T: ?Sized + ptr_meta::Pointee<Metadata = DynMetadata<T>>,
     {
+        // We cannot determine the align of `T` at compile time, so we set it to 0.
         const USED_PTR_BITS_MASK: usize = { 0_usize };
 
         type Pointee = T;
 
-        fn mask(meta: &DynMetadata<T>) -> usize {
-            let align = meta.align_of();
-            let align_bits = align.ilog2() as usize;
-            usize::MAX << align_bits
+        fn mask(meta: &WithMaskMeta<T>) -> usize {
+            meta.mask
         }
 
-        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, DynMetadata<T>) {
+        fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, WithMaskMeta<T>) {
             let ptr = Arc::into_raw(self);
             let (raw_ptr, meta) = ptr_meta::to_raw_parts(ptr);
-            (NonZeroUsize::new(raw_ptr as usize).unwrap(), meta)
+            let align = meta.align_of();
+            let align_bits = align.ilog2() as usize;
+            let mask = usize::MAX << align_bits;
+            (
+                NonZeroUsize::new(raw_ptr as usize).unwrap(),
+                WithMaskMeta { data: meta, mask },
+            )
         }
 
-        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: DynMetadata<T>) -> Self {
+        unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> Self {
             let ptr = NonZeroUsize::get(nz) as *const ();
-            unsafe { Arc::from_raw(ptr_meta::from_raw_parts(ptr, meta)) }
+            unsafe { Arc::from_raw(ptr_meta::from_raw_parts(ptr, meta.data)) }
         }
 
-        unsafe fn map_pointee(nz: NonZeroUsize, meta: DynMetadata<T>) -> *const Self::Pointee
-        where
-            Self: std::ops::Deref<Target = Self::Pointee>,
-        {
+        unsafe fn map_pointee(nz: NonZeroUsize, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
             let ptr = NonZeroUsize::get(nz) as *const ();
-            ptr_meta::from_raw_parts(ptr, meta)
+            unsafe {
+                NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr as *mut (), meta.data))
+            }
         }
 
-        unsafe fn map_pointee_mut(nz: NonZeroUsize, meta: DynMetadata<T>) -> *mut Self::Pointee
-        where
-            Self: std::ops::DerefMut<Target = Self::Pointee>,
-        {
-            let ptr = NonZeroUsize::get(nz) as *const ();
-            ptr_meta::from_raw_parts_mut(ptr as *mut (), meta)
-        }
-
-        unsafe fn clone_storage(nz: NonZeroUsize, meta: &DynMetadata<T>) -> Self
+        unsafe fn clone_storage(nz: NonZeroUsize, meta: &WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
             let ptr = NonZeroUsize::get(nz) as *const ();
-            let arc: Arc<T> = unsafe { Arc::from_raw(ptr_meta::from_raw_parts(ptr, *meta)) };
-            let cloned = arc.clone();
-            mem::forget(arc);
-            cloned
+            unsafe { Arc::increment_strong_count(ptr) };
+            unsafe { Arc::from_raw(ptr_meta::from_raw_parts(ptr, meta.data)) }
         }
     }
 }
