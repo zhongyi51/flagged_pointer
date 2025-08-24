@@ -1,28 +1,28 @@
 //! # Flag Metadata
-//! 
+//!
 //! This module defines the `FlagMeta` trait and implementations for encoding
 //! flag information within unused pointer bits.
 
 /// A trait for types that can be encoded as flags in unused pointer bits.
-/// 
+///
 /// This trait is `unsafe` to implement because it requires careful attention to
 /// bit patterns and must not conflict with valid pointer bits.
-/// 
+///
 /// # Safety
-/// 
+///
 /// Implementors must ensure:
 /// 1. usize returned by `mask()` includes all bits that are guaranteed to be unused in pointers, more is ok but less is not
 /// 2. `to_usize` and `from_usize` are inverse operations
 /// 3. All possible values of `USED_FLAG_BITS_MASK` are valid for the type
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use flagged_pointer::flag::FlagMeta;
-/// 
+///
 /// #[derive(Copy, Clone)]
 /// struct MyFlags(u8);
-/// 
+///
 /// unsafe impl FlagMeta for MyFlags {
 ///     const USED_FLAG_BITS_MASK: usize = 0b111; // Use bottom 3 bits
 ///     
@@ -54,7 +54,6 @@ pub unsafe trait FlagMeta: Copy {
     unsafe fn from_usize(nz: usize) -> Self;
 }
 
-
 /// Implement `FlagMeta` for `enumflags2::BitFlags`
 /// Because `const_ops` is not stable, we have to record the num type and manually cast it in compile time
 mod enumflag_impl {
@@ -70,6 +69,11 @@ mod enumflag_impl {
         U32,
         U16,
         U8,
+        Isize,
+        I64,
+        I32,
+        I16,
+        I8,
     }
 
     trait ConstNumType: Copy {
@@ -91,6 +95,21 @@ mod enumflag_impl {
     impl ConstNumType for usize {
         const NUM_TYPE: NumType = NumType::Usize;
     }
+    impl ConstNumType for i8 {
+        const NUM_TYPE: NumType = NumType::I8;
+    }
+    impl ConstNumType for i16 {
+        const NUM_TYPE: NumType = NumType::I16;
+    }
+    impl ConstNumType for i32 {
+        const NUM_TYPE: NumType = NumType::I32;
+    }
+    impl ConstNumType for i64 {
+        const NUM_TYPE: NumType = NumType::I64;
+    }
+    impl ConstNumType for isize {
+        const NUM_TYPE: NumType = NumType::Isize;
+    }
 
     const fn cast_from_usize<N>(nz: usize) -> N
     where
@@ -106,6 +125,11 @@ mod enumflag_impl {
             NumType::U32 => unsafe { transmute_copy(&(nz as u32)) },
             NumType::U64 => unsafe { transmute_copy(&(nz as u64)) },
             NumType::Usize => unsafe { transmute_copy(&(nz as usize)) },
+            NumType::Isize => unsafe { transmute_copy(&(nz as isize)) },
+            NumType::I8 => unsafe { transmute_copy(&(nz as i8)) },
+            NumType::I16 => unsafe { transmute_copy(&(nz as i16)) },
+            NumType::I32 => unsafe { transmute_copy(&(nz as i32)) },
+            NumType::I64 => unsafe { transmute_copy(&(nz as i64)) },
         }
     }
 
@@ -137,6 +161,26 @@ mod enumflag_impl {
             NumType::Usize => unsafe {
                 let n_usize: usize = transmute_copy(&num);
                 n_usize
+            },
+            NumType::Isize => unsafe {
+                let n_isize: isize = transmute_copy(&num);
+                n_isize as usize
+            },
+            NumType::I8 => unsafe {
+                let n_i8: i8 = transmute_copy(&num);
+                n_i8 as usize
+            },
+            NumType::I16 => unsafe {
+                let n_i16: i16 = transmute_copy(&num);
+                n_i16 as usize
+            },
+            NumType::I32 => unsafe {
+                let n_i32: i32 = transmute_copy(&num);
+                n_i32 as usize
+            },
+            NumType::I64 => unsafe {
+                let n_i64: i64 = transmute_copy(&num);
+                n_i64 as usize
             },
         }
     }

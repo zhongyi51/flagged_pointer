@@ -6,27 +6,6 @@
 //! in aligned pointers to store additional flag information. This is particularly useful
 //! for implementing space-efficient data structures like tagged unions or specialized
 //! memory allocators.
-//!
-//! # Examples
-//!
-//! ```
-//! use flagged_pointer::FlaggedPtr;
-//! use enumflags2::{bitflags, BitFlags};
-//!
-//! #[bitflags]
-//! #[repr(u8)]
-//! #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-//! enum MyFlags {
-//!     A = 1 << 0,
-//!     B = 1 << 1,
-//! }
-//!
-//! let data = Box::new(42);
-//! let mut ptr = FlaggedPtr::new(data, MyFlags::A | MyFlags::B);
-//!
-//! assert_eq!(*ptr, 42);
-//! assert_eq!(ptr.flag(), MyFlags::A | MyFlags::B);
-//! ```
 use std::{
     marker::PhantomData,
     mem,
@@ -47,9 +26,10 @@ pub mod ptr;
 /// # Type Parameters
 /// - `P`: The pointer type (e.g., `Box<T>`, `NonNull<T>`, `Rc<T>`)
 /// - `F`: The flag type (must implement `FlagMeta`)
-/// - `M`: Metadata associated with the pointer type
+/// - `M`: Metadata associated with the pointer 
+/// 
 /// # Examples
-///
+/// 
 /// ```
 /// use flagged_pointer::FlaggedPtr;
 /// use enumflags2::{bitflags, BitFlags};
@@ -68,6 +48,47 @@ pub mod ptr;
 ///
 /// assert_eq!(*flagged, "hello");
 /// assert_eq!(flagged.flag(), Color::Red | Color::Blue);
+/// ```
+/// 
+/// # Example with trait object
+/// 
+/// ```
+/// use flagged_pointer::alias::*;
+/// use std::sync::Arc;
+/// use ptr_meta::pointee;
+/// use enumflags2::{bitflags,BitFlags};
+/// 
+/// #[bitflags]
+/// #[repr(u8)]
+/// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// enum Color {
+///     Red = 1 << 0,
+///     Blue = 1 << 1,
+///     Green = 1 << 2,
+/// } 
+/// 
+/// #[ptr_meta::pointee]
+/// trait MyTrait {
+///    fn method(&self);
+/// }
+/// 
+/// impl MyTrait for i64 {
+///    fn method(&self) {
+///        println!("i32 method");
+///    }
+/// }
+/// 
+/// impl MyTrait for String {
+///    fn method(&self) {
+///        println!("String method");
+///    }
+/// }
+/// 
+/// let trait_obj: FlaggedBoxDyn<dyn MyTrait, BitFlags<Color>> = FlaggedBoxDyn::new(Box::new(42_i64), Color::Red | Color::Blue);
+/// trait_obj.method();
+/// let trait_obj: FlaggedArcDyn<dyn MyTrait, BitFlags<Color>> = FlaggedArcDyn::new(Arc::new("hello".to_string()), Color::Red | Color::Blue);
+/// trait_obj.method();
+/// 
 /// ```
 pub struct FlaggedPtr<P, F, M>
 where
