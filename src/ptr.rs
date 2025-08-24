@@ -1,25 +1,75 @@
+//! # Pointer Metadata
+//! 
+//! This module defines the `PtrMeta` trait for handling different pointer types
+//! and their associated metadata, particularly for fat pointers like slices and trait objects.
+//! 
+//! # Safety
+//! 
+//! Implementations must correctly handle pointer metadata and ensure that
+//! the unused bits calculation is accurate for the target architecture.
+
 use std::{num::NonZeroUsize, ops::Deref, ptr::NonNull};
 
-/// Metadata for the pointer.
+/// Metadata trait for pointer types that can be used with `FlaggedPtr`.
+/// 
+/// This trait abstracts over different pointer types (thin and fat pointers)
+/// to provide a uniform interface for encoding flags in unused bits.
+/// 
+/// # Type Parameters
+/// - `M`: The metadata type associated with the pointer (e.g., `()` for thin pointers, `usize` for slices)
+/// 
+/// # Safety
+/// 
+/// Implementors must ensure:
+/// 1. `USED_PTR_BITS_MASK` correctly identifies unused bits for the pointer type
+/// 2. `to_pointee_ptr_and_meta` and `from_pointee_ptr_and_meta` are inverse operations
+/// 3. All methods maintain pointer validity and safety invariants
+/// 
+/// # Examples
+/// 
+/// The crate provides implementations for common pointer types:
+/// - `NonNull<T>` - Thin pointers
+/// - `Box<T>` - Owned pointers
+/// - `NonNull<[T]>` - Slice pointers
+/// - `Box<dyn Trait>` - Trait object pointers
 pub unsafe trait PtrMeta<M>
 where
     M: Copy,
 {
+    /// Bitmask indicating which bits are used by the actual pointer (not flags).
+    /// 
+    /// This should exclude bits that are guaranteed to be zero due to alignment.
     const USED_PTR_BITS_MASK: usize;
 
-    // Internal pointed data type.
+    /// The type that this pointer points to.
     type Pointee: ?Sized;
 
+    /// Returns the bitmask for pointer bits.
+    /// 
+    /// Defaults to `USED_PTR_BITS_MASK` but can be overridden for dynamic masks.
     fn mask(meta: &M) -> usize {
         Self::USED_PTR_BITS_MASK
     }
 
+    /// Converts the pointer into its raw representation and metadata.
     fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, M);
 
+    /// Reconstructs the pointer from its raw representation and metadata.
+    /// 
+    /// # Safety
+    /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
     unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: M) -> Self;
 
+    /// Maps the raw pointer representation to a `NonNull` pointer to the pointee.
+    /// 
+    /// # Safety
+    /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
     unsafe fn map_pointee(nz: NonZeroUsize, meta: M) -> NonNull<Self::Pointee>;
 
+    /// Clones the underlying storage for pointer types that support cloning.
+    /// 
+    /// # Safety
+    /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
     unsafe fn clone_storage(nz: NonZeroUsize, meta: &M) -> Self
     where
         Self: Clone;
@@ -33,11 +83,20 @@ pub mod ptr_impl {
 
     use crate::ptr::PtrMeta;
 
+    /// Metadata wrapper for dynamic dispatch pointers (trait objects).
+    /// 
+    /// This struct holds both the dynamic metadata (vtable) and the calculated
+    /// mask for unused bits for trait object pointers.
+    /// 
+    /// # Type Parameters
+    /// - `T`: The trait type (e.g., `dyn MyTrait`)
     pub struct WithMaskMeta<T>
     where
         T: ?Sized,
     {
+        /// Dynamic metadata for the trait object (vtable pointer).
         pub(crate) data: DynMetadata<T>,
+        /// Calculated mask for unused bits based on the actual alignment.
         pub(crate) mask: usize,
     }
 

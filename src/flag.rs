@@ -1,15 +1,62 @@
+//! # Flag Metadata
+//! 
+//! This module defines the `FlagMeta` trait and implementations for encoding
+//! flag information within unused pointer bits.
+
+/// A trait for types that can be encoded as flags in unused pointer bits.
+/// 
+/// This trait is `unsafe` to implement because it requires careful attention to
+/// bit patterns and must not conflict with valid pointer bits.
+/// 
+/// # Safety
+/// 
+/// Implementors must ensure:
+/// 1. usize returned by `mask()` includes all bits that are guaranteed to be unused in pointers, more is ok but less is not
+/// 2. `to_usize` and `from_usize` are inverse operations
+/// 3. All possible values of `USED_FLAG_BITS_MASK` are valid for the type
+/// 
+/// # Examples
+/// 
+/// ```
+/// use flagged_pointer::flag::FlagMeta;
+/// 
+/// #[derive(Copy, Clone)]
+/// struct MyFlags(u8);
+/// 
+/// unsafe impl FlagMeta for MyFlags {
+///     const USED_FLAG_BITS_MASK: usize = 0b111; // Use bottom 3 bits
+///     
+///     fn to_usize(self) -> usize {
+///         self.0 as usize
+///     }
+///     
+///     unsafe fn from_usize(nz: usize) -> Self {
+///         MyFlags(nz as u8)
+///     }
+/// }
+/// ```
 pub unsafe trait FlagMeta: Copy {
+    /// Bitmask indicating which bits are used for flags, only for compile time check
+    /// If bitmask is not known at compile time, set it to 0 (means no compile time check)
     const USED_FLAG_BITS_MASK: usize;
 
+    /// Returns the bitmask for flag bits.
+    /// Defaults to `USED_FLAG_BITS_MASK` but can be overridden for dynamic masks.
     fn mask() -> usize {
         Self::USED_FLAG_BITS_MASK
     }
 
+    /// Converts the flag type to a `usize` for storage in pointer bits.
     fn to_usize(self) -> usize;
 
+    /// Converts a `usize` back to the flag type.
+    /// The caller can garantee that `nz` contains only valid flag bits.
     unsafe fn from_usize(nz: usize) -> Self;
 }
 
+
+/// Implement `FlagMeta` for `enumflags2::BitFlags`
+/// Because `const_ops` is not stable, we have to record the num type and manually cast it in compile time
 mod enumflag_impl {
     use std::mem::transmute_copy;
 
