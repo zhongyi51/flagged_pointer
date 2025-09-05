@@ -26,10 +26,10 @@ pub mod ptr;
 /// # Type Parameters
 /// - `P`: The pointer type (e.g., `Box<T>`, `NonNull<T>`, `Rc<T>`)
 /// - `F`: The flag type (must implement `FlagMeta`)
-/// - `M`: Metadata associated with the pointer 
-/// 
+/// - `M`: Metadata associated with the pointer
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use flagged_pointer::FlaggedPtr;
 /// use enumflags2::{bitflags, BitFlags};
@@ -49,15 +49,15 @@ pub mod ptr;
 /// assert_eq!(*flagged, "hello");
 /// assert_eq!(flagged.flag(), Color::Red | Color::Blue);
 /// ```
-/// 
+///
 /// # Example with trait object
-/// 
+///
 /// ```
 /// use flagged_pointer::alias::*;
 /// use std::sync::Arc;
 /// use ptr_meta::pointee;
 /// use enumflags2::{bitflags,BitFlags};
-/// 
+///
 /// #[bitflags]
 /// #[repr(u8)]
 /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -65,30 +65,30 @@ pub mod ptr;
 ///     Red = 1 << 0,
 ///     Blue = 1 << 1,
 ///     Green = 1 << 2,
-/// } 
-/// 
+/// }
+///
 /// #[ptr_meta::pointee]
 /// trait MyTrait {
 ///    fn method(&self);
 /// }
-/// 
+///
 /// impl MyTrait for i64 {
 ///    fn method(&self) {
 ///        println!("i32 method");
 ///    }
 /// }
-/// 
+///
 /// impl MyTrait for String {
 ///    fn method(&self) {
 ///        println!("String method");
 ///    }
 /// }
-/// 
+///
 /// let trait_obj: FlaggedBoxDyn<dyn MyTrait, BitFlags<Color>> = FlaggedBoxDyn::new(Box::new(42_i64), Color::Red | Color::Blue);
 /// trait_obj.method();
 /// let trait_obj: FlaggedArcDyn<dyn MyTrait, BitFlags<Color>> = FlaggedArcDyn::new(Arc::new("hello".to_string()), Color::Red | Color::Blue);
 /// trait_obj.method();
-/// 
+///
 /// ```
 pub struct FlaggedPtr<P, F, M>
 where
@@ -120,7 +120,10 @@ where
 {
     /// Assert that the pointer and flag bits do not overlap.
     /// This assertion may still pass because `P`'s alignment cannot be guaranteed at compile time.
-    const _ASSERT: () = assert!(P::USED_PTR_BITS_MASK & F::USED_FLAG_BITS_MASK as usize == 0);
+    const _ASSERT: () = assert!(
+        P::USED_PTR_BITS_MASK & F::USED_FLAG_BITS_MASK as usize == 0,
+        "Pointer and flag bits overlap - this indicates an alignment issue or too many flag bits"
+    );
 
     /// Creates a new `FlaggedPtr` from a pointer and flags.
     ///
