@@ -33,7 +33,7 @@ assert_eq!(*flagged, "hello world");
 assert_eq!(flagged.flag(), Color::Red | Color::Blue);
 
 // Update flags
-flagged.set_flag(Color::Green);
+flagged.set_flag(Color::Green.into());
 assert_eq!(flagged.flag(), Color::Green);
 
 // Extract original pointer and flags
@@ -92,10 +92,10 @@ impl MyTrait for String {
 }
 
 // With trait objects
-let trait_obj: FlaggedBox<dyn MyTrait, Color> = FlaggedBox::new(Box::new(42), Color::Red | Color::Blue);
+let trait_obj: FlaggedBoxDyn<dyn MyTrait, Color> = FlaggedBoxDyn::new(Box::new(42), Color::Red | Color::Blue);
 trait_obj.method(); // Prints "i32 method"
 
-let trait_obj: FlaggedBox<dyn MyTrait, Color> = FlaggedBox::new(Box::new("hello".to_string()), Color::Red | Color::Blue);
+let trait_obj: FlaggedBoxDyn<dyn MyTrait, Color> = FlaggedBoxDyn::new(Box::new("hello".to_string()), Color::Red | Color::Blue);
 trait_obj.method(); // Prints "String method"
 ```
 
