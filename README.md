@@ -23,23 +23,22 @@ use enumflags2::{bitflags, BitFlags};
 enum Color {
     Red = 1 << 0,
     Blue = 1 << 1,
-    Green = 1 << 2,
 }
 
 let boxed = Box::new("hello world");
-let flagged = FlaggedPtr::new(boxed, Color::Red | Color::Blue);
+let mut flagged = FlaggedPtr::new(boxed, BitFlags::from(Color::Red));
 
 assert_eq!(*flagged, "hello world");
-assert_eq!(flagged.flag(), Color::Red | Color::Blue);
+assert_eq!(flagged.flag(), BitFlags::from(Color::Red));
 
 // Update flags
-flagged.set_flag(Color::Green.into());
-assert_eq!(flagged.flag(), Color::Green);
+flagged.set_flag(BitFlags::from(Color::Blue));
+assert_eq!(flagged.flag(), BitFlags::from(Color::Blue));
 
 // Extract original pointer and flags
 let (recovered_box, flags) = flagged.dissolve();
 assert_eq!(*recovered_box, "hello world");
-assert_eq!(flags, Color::Green);
+assert_eq!(flags, BitFlags::from(Color::Blue));
 ```
 
 ### With Different Pointer Types
@@ -47,6 +46,7 @@ assert_eq!(flags, Color::Green);
 ```rust
 use flagged_pointer::alias::*;
 use std::sync::Arc;
+use enumflags2::{bitflags, BitFlags};
 
 #[bitflags]
 #[repr(u8)]
@@ -54,49 +54,45 @@ use std::sync::Arc;
 enum Color {
     Red = 1 << 0,
     Blue = 1 << 1,
-    Green = 1 << 2,
 }
 
 // With Box
-let boxed: FlaggedBox<i32, u8> = FlaggedBox::new(Box::new(42), Color::Red | Color::Blue);
+let boxed: FlaggedBox<i32, BitFlags<Color>> = FlaggedBox::new(Box::new(42), BitFlags::from(Color::Red));
 
 // With Arc
-let shared: FlaggedArc<String, Color> = FlaggedArc::new(Arc::new("hello".to_string()), Color::Red | Color::Blue);
-
-// With slices
-let slice: FlaggedBoxSlice<i32, Color> = FlaggedBoxSlice::new(Box::new([1, 2, 3, 4]), Color::Red | Color::Blue);
+let shared: FlaggedArc<String, BitFlags<Color>> = FlaggedArc::new(Arc::new("hello".to_string()), BitFlags::from(Color::Red));
 ```
 
 ### With Trait Objects
 
 ```rust
 use flagged_pointer::alias::*;
-use std::sync::Arc;
+use enumflags2::{bitflags, BitFlags};
+use ptr_meta::pointee;
 
-// Use `ptr_meta` to get the alignment of the trait object
-#[ptr_meta::pointee]
-trait MyTrait {
-    fn method(&self);
+#[bitflags]
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Color {
+    Red = 1 << 0,
+    Blue = 1 << 1,
 }
 
-impl MyTrait for i32 {
-    fn method(&self) {
-        println!("i32 method");
-    }
+#[pointee]
+trait MySimpleTrait {
+    fn get_value(&self) -> &str;
 }
 
-impl MyTrait for String {
-    fn method(&self) {
-        println!("String method");
+impl MySimpleTrait for String {
+    fn get_value(&self) -> &str {
+        self.as_str()
     }
 }
 
 // With trait objects
-let trait_obj: FlaggedBoxDyn<dyn MyTrait, Color> = FlaggedBoxDyn::new(Box::new(42), Color::Red | Color::Blue);
-trait_obj.method(); // Prints "i32 method"
-
-let trait_obj: FlaggedBoxDyn<dyn MyTrait, Color> = FlaggedBoxDyn::new(Box::new("hello".to_string()), Color::Red | Color::Blue);
-trait_obj.method(); // Prints "String method"
+let trait_obj: FlaggedBoxDyn<dyn MySimpleTrait, BitFlags<Color>> = 
+    FlaggedBoxDyn::new(Box::new("hello".to_string()), BitFlags::from(Color::Red | Color::Blue));
+println!("Value: {}", trait_obj.get_value());
 ```
 
 ## How It Works
