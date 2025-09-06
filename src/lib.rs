@@ -121,7 +121,7 @@ where
     /// Assert that the pointer and flag bits do not overlap.
     /// This assertion may still pass because `P`'s alignment cannot be guaranteed at compile time.
     const _ASSERT: () = assert!(
-        P::USED_PTR_BITS_MASK & F::USED_FLAG_BITS_MASK as usize == 0,
+        P::USED_PTR_BITS_MASK & F::USED_FLAG_BITS_MASK == 0,
         "Pointer and flag bits overlap - this indicates an alignment issue or too many flag bits"
     );
 

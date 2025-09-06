@@ -11,7 +11,7 @@
 /// # Safety
 ///
 /// Implementors must ensure:
-/// 1. usize returned by `mask()` includes all bits that are guaranteed to be unused in pointers, more is ok but less is not
+/// 1. usize returned by `mask()` includes all bits that are guaranteed to be unused in pointers, more bits is ok but less bits will cause UB.
 /// 2. `to_usize` and `from_usize` are inverse operations
 /// 3. All possible values of `USED_FLAG_BITS_MASK` are valid for the type
 ///
@@ -50,7 +50,9 @@ pub unsafe trait FlagMeta: Copy {
     fn to_usize(self) -> usize;
 
     /// Converts a `usize` back to the flag type.
-    /// The caller can garantee that `nz` contains only valid flag bits.
+    /// 
+    /// # Safety
+    /// The caller must ensure that `nz` contains only valid flag bits.
     unsafe fn from_usize(nz: usize) -> Self;
 }
 
@@ -104,7 +106,7 @@ mod enumflag_impl {
             NumType::U16 => unsafe { transmute_copy(&(nz as u16)) },
             NumType::U32 => unsafe { transmute_copy(&(nz as u32)) },
             NumType::U64 => unsafe { transmute_copy(&(nz as u64)) },
-            NumType::Usize => unsafe { transmute_copy(&(nz as usize)) },
+            NumType::Usize => unsafe { transmute_copy(&nz) },
         }
     }
 

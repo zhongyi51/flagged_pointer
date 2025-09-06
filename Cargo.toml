@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = ["crates-io"]
 description = "A safe abstraction for tagged pointers using unused bits for flags"
-repository = "https://github.com/your-username/flagged_pointer"
-license = "MIT OR Apache-2.0"
+repository = "https://github.com/zhongyi51/flagged_pointer"
+license = "MIT"
 keywords = ["pointer", "tagged", "flags", "memory", "efficiency"]
-categories = ["data-structures", "memory-management", "no-std"]
+categories = ["data-structures", "memory-management"]
 readme = "README.md"
 
 [dependencies]

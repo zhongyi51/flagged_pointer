@@ -8,7 +8,7 @@
 //! Implementations must correctly handle pointer metadata and ensure that
 //! the unused bits calculation is accurate for the target architecture.
 
-use std::{num::NonZeroUsize, ops::Deref, ptr::NonNull};
+use std::{num::NonZeroUsize, ptr::NonNull};
 
 /// Metadata trait for pointer types that can be used with `FlaggedPtr`.
 ///
@@ -37,7 +37,6 @@ where
     M: Copy,
 {
     /// Bitmask indicating which bits are used by the actual pointer (not flags).
-    ///
     /// This should exclude bits that are guaranteed to be zero due to alignment.
     const USED_PTR_BITS_MASK: usize;
 
@@ -45,9 +44,8 @@ where
     type Pointee: ?Sized;
 
     /// Returns the bitmask for pointer bits.
-    ///
     /// Defaults to `USED_PTR_BITS_MASK` but can be overridden for dynamic masks.
-    fn mask(meta: &M) -> usize {
+    fn mask(_meta: &M) -> usize {
         Self::USED_PTR_BITS_MASK
     }
 
@@ -55,7 +53,7 @@ where
     fn to_pointee_ptr_and_meta(self) -> (NonZeroUsize, M);
 
     /// Reconstructs the pointer from its raw representation and metadata.
-    ///
+    /// 
     /// # Safety
     /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
     unsafe fn from_pointee_ptr_and_meta(nz: NonZeroUsize, meta: M) -> Self;
