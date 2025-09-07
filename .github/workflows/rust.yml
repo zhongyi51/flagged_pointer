@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  MIRIFLAGS: -Zmiri-strict-provenance
 
 jobs:
   build:
@@ -16,7 +18,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    
     - name: Build
       run: cargo build --verbose
+      
     - name: Run tests
       run: cargo test --verbose
+      
+    - name: Run miri tests with strict provenance
+      run: cargo miri test
