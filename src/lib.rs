@@ -9,7 +9,6 @@
 use std::{
     marker::PhantomData,
     mem,
-    num::NonZeroUsize,
     ops::{Deref, DerefMut},
     ptr::NonNull,
 };
@@ -100,7 +99,7 @@ where
     ///
     /// This stores both the actual pointer value and the flag bits.
     /// The unused bits due to alignment are used for flags.
-    repr: NonZeroUsize,
+    repr: NonNull<()>,
 
     /// Metadata associated with the pointer.
     ///
@@ -163,7 +162,7 @@ where
             F::mask() & P::mask(&meta) == 0,
             "Pointer and flag bits overlap - this indicates an alignment issue or too many flag bits"
         );
-        let repr = NonZeroUsize::new(ptr.get() | flag.to_usize()).unwrap();
+        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()) as *mut () )};
         Self {
             repr,
             meta,
@@ -199,7 +198,7 @@ where
     /// assert_eq!(flagged.flag(), MyFlags::A | MyFlags::B);
     /// ```
     pub fn flag(&self) -> F {
-        let flag_repr = F::mask() & self.repr.get();
+        let flag_repr = F::mask() & self.repr.as_ptr() as usize;
         // SAFETY: We know the flag bits are valid because they were set by `new`
         // or `set_flag`, both of which ensure the bits are within the valid range
         unsafe { F::from_usize(flag_repr) }
@@ -231,8 +230,8 @@ where
     /// ```
     pub fn set_flag(&mut self, flag: F) {
         let flag_repr = flag.to_usize();
-        let ptr_repr = self.repr.get() & P::mask(&self.meta);
-        self.repr = NonZeroUsize::new(ptr_repr | flag_repr).unwrap();
+        let ptr_repr = self.ptr_repr();
+        self.repr = ptr_repr.map_addr(|addr| addr | flag_repr);
     }
 
     /// Consumes this `FlaggedPtr` and returns the original pointer and flags.
@@ -264,15 +263,15 @@ where
     /// assert_eq!(flags, MyFlags::A | MyFlags::B);
     /// ```
     pub fn dissolve(self) -> (P, F) {
-        let ptr_repr = self.repr.get() & P::mask(&self.meta);
-        let flag_repr = F::mask() & self.repr.get();
+        let ptr_repr = self.repr.as_ptr();
+        let flag_repr = F::mask() & ptr_repr as usize;
 
         // SAFETY: We know these values are valid because:
         // 1. The pointer was originally created from a valid P
         // 2. We've masked out the flag bits, leaving only valid pointer bits
         // 3. The metadata is preserved from construction
         let ptr = unsafe {
-            P::from_pointee_ptr_and_meta(NonZeroUsize::new(ptr_repr).unwrap_unchecked(), self.meta)
+            P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta)
         };
         let flag = unsafe { F::from_usize(flag_repr) };
 
@@ -281,9 +280,9 @@ where
         (ptr, flag)
     }
 
-    fn ptr_repr(&self) -> NonZeroUsize {
-        let ptr_val = self.repr.get() & P::mask(&self.meta);
-        unsafe { NonZeroUsize::new_unchecked(ptr_val) }
+    fn ptr_repr(&self) -> NonNull<()> {
+        let ptr_val = self.repr.as_ptr().map_addr(|addr| addr & P::mask(&self.meta)); 
+        unsafe { NonNull::new_unchecked(ptr_val) }
     }
 
     /// Returns a raw pointer to the pointee.
@@ -371,9 +370,8 @@ where
     M: Copy,
 {
     fn clone(&self) -> Self {
-        let ptr_repr = self.repr.get() & P::mask(&self.meta);
-        let nz = NonZeroUsize::new(ptr_repr).unwrap();
-        let cloned_ptr_storage = unsafe { P::clone_storage(nz, &self.meta) };
+        let ptr_repr = self.ptr_repr();
+        let cloned_ptr_storage = unsafe { P::clone_storage(ptr_repr, &self.meta) };
         let flag = self.flag();
         Self::new(cloned_ptr_storage, flag)
     }
