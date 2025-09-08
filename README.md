@@ -123,3 +123,7 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - Basic tagged pointer implementation
 - Support for common pointer types
 - Comprehensive documentation
+
+### 0.1.1
+- `miri` tests
+- All pointers with provanance
