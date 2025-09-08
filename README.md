@@ -106,7 +106,7 @@ Due to the platform reason, high bits of the pointer are not used but I am worki
 For trait objects (e.g., 'dyn MyTrait'), their alignment cannot be determined in compile time,
 so the assertion can only be done in runtime.
 
-Also, `ptr_meta` is not stable yet, so you have to use `ptr_meta`
+Also, `ptr_meta` is not stable yet, so you have to use `ptr_meta` crate for your trait objects.
 
 ## Contributing
 
