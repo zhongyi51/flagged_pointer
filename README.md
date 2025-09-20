@@ -106,7 +106,7 @@ Due to the platform reason, high bits of the pointer are not used but I am worki
 For trait objects (e.g., 'dyn MyTrait'), their alignment cannot be determined in compile time,
 so the assertion can only be done in runtime.
 
-Also, `ptr_meta` is not stable yet, so you have to use `ptr_meta`
+Also, `ptr_meta` is not stable yet, so you have to use `ptr_meta` crate for your trait objects.
 
 ## Contributing
 
@@ -114,9 +114,6 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 ## Changelog
@@ -126,3 +123,7 @@ Licensed under either of:
 - Basic tagged pointer implementation
 - Support for common pointer types
 - Comprehensive documentation
+
+### 0.1.1
+- `miri` tests
+- All pointers with provanance
