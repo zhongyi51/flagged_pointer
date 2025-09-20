@@ -155,14 +155,15 @@ where
     /// for properly aligned pointers and reasonable flag values.
     pub fn new(ptr: P, flag: F) -> Self {
         // Static assert, which will be checked at compile time.
-        let _ = Self::_ASSERT;
+        #[allow(path_statements)]
+        Self::_ASSERT;
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
         // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
         assert!(
             F::mask() & P::mask(&meta) == 0,
             "Pointer and flag bits overlap - this indicates an alignment issue or too many flag bits"
         );
-        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()) as *mut () )};
+        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
         Self {
             repr,
             meta,

@@ -361,7 +361,7 @@ pub mod ptr_impl {
         type Pointee = T;
 
         fn to_pointee_ptr_and_meta(self) -> (NonNull<()>, ()) {
-            let ptr = Rc::into_raw(self) as *const T as *mut T;
+            let ptr = Rc::into_raw(self) as *mut T;
             let nz = unsafe { NonNull::new_unchecked(ptr as *mut ()) };
             (nz, ())
         }
@@ -396,7 +396,7 @@ pub mod ptr_impl {
         type Pointee = T;
 
         fn to_pointee_ptr_and_meta(self) -> (NonNull<()>, ()) {
-            let ptr = Arc::into_raw(self) as *const T as *mut T;
+            let ptr = Arc::into_raw(self) as *mut T;
             let nz = unsafe { NonNull::new_unchecked(ptr as *mut ()) };
             (nz, ())
         }
