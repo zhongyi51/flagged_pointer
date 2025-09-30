@@ -53,7 +53,7 @@ where
     fn to_pointee_ptr_and_meta(self) -> (NonNull<()>, M);
 
     /// Reconstructs the pointer from its raw representation and metadata.
-    /// 
+    ///
     /// # Safety
     /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
     unsafe fn from_pointee_ptr_and_meta(nz: NonNull<()>, meta: M) -> Self;
@@ -344,7 +344,8 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr();
-            let boxed:Box<T> = unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data)) };
+            let boxed: Box<T> =
+                unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data)) };
             let cloned = boxed.clone();
             mem::forget(boxed);
             cloned
@@ -533,9 +534,7 @@ pub mod ptr_impl {
 
         unsafe fn map_pointee(nz: NonNull<()>, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
             let ptr = nz.as_ptr();
-            unsafe {
-                NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data))
-            }
+            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
         unsafe fn clone_storage(nz: NonNull<()>, meta: &WithMaskMeta<T>) -> Self
@@ -580,9 +579,7 @@ pub mod ptr_impl {
 
         unsafe fn map_pointee(nz: NonNull<()>, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
             let ptr = nz.as_ptr();
-            unsafe {
-                NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data))
-            }
+            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
         unsafe fn clone_storage(nz: NonNull<()>, meta: &WithMaskMeta<T>) -> Self
