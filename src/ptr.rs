@@ -45,7 +45,7 @@ where
 
     /// Returns the bitmask for pointer bits.
     /// Defaults to `USED_PTR_BITS_MASK` but can be overridden for dynamic masks.
-    fn mask(_meta: &M) -> usize {
+    fn mask(_meta: M) -> usize {
         Self::USED_PTR_BITS_MASK
     }
 
@@ -193,7 +193,7 @@ pub mod ptr_impl {
 
         type Pointee = T;
 
-        fn mask(meta: &WithMaskMeta<T>) -> usize {
+        fn mask(meta: WithMaskMeta<T>) -> usize {
             meta.mask
         }
 
@@ -313,7 +313,7 @@ pub mod ptr_impl {
 
         type Pointee = T;
 
-        fn mask(meta: &WithMaskMeta<T>) -> usize {
+        fn mask(meta: WithMaskMeta<T>) -> usize {
             meta.mask
         }
 
@@ -510,7 +510,7 @@ pub mod ptr_impl {
 
         type Pointee = T;
 
-        fn mask(meta: &WithMaskMeta<T>) -> usize {
+        fn mask(meta: WithMaskMeta<T>) -> usize {
             meta.mask
         }
 
@@ -557,7 +557,7 @@ pub mod ptr_impl {
 
         type Pointee = T;
 
-        fn mask(meta: &WithMaskMeta<T>) -> usize {
+        fn mask(meta: WithMaskMeta<T>) -> usize {
             meta.mask
         }
 

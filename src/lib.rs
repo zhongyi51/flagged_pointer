@@ -160,7 +160,7 @@ where
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
         // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
         assert!(
-            F::mask() & P::mask(&meta) == 0,
+            F::mask() & P::mask(meta) == 0,
             "Pointer and flag bits overlap - this indicates an alignment issue or too many flag bits"
         );
         let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
@@ -282,7 +282,7 @@ where
     }
 
     fn ptr_repr(&self) -> NonNull<()> {
-        let ptr_val = self.repr.as_ptr().map_addr(|addr| addr & P::mask(&self.meta)); 
+        let ptr_val = self.repr.as_ptr().map_addr(|addr| addr & P::mask(self.meta)); 
         unsafe { NonNull::new_unchecked(ptr_val) }
     }
 
