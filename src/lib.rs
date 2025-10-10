@@ -378,6 +378,18 @@ where
     }
 }
 
+impl<P, F, M> std::fmt::Pointer for FlaggedPtr<P, F, M>
+where
+    P: PtrMeta<M>,
+    F: FlagMeta,
+    M: Copy,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ptr = self.as_ptr();
+        std::fmt::Pointer::fmt(&ptr, f)
+    }
+}
+
 unsafe impl<P, F, M> Send for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Send,
