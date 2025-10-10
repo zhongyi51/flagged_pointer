@@ -217,6 +217,8 @@ where
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
         // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
         if F::mask() & P::mask(meta) != 0 {
+            // allowing drop origin pointer
+            unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
             return Err(crate::error::FlagOverlapError::new(P::mask(meta), F::mask()));
         }
         let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
