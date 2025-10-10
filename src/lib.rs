@@ -17,6 +17,8 @@ use crate::{flag::FlagMeta, ptr::PtrMeta};
 
 pub mod flag;
 pub mod ptr;
+pub mod error;
+
 /// A pointer that stores flags within unused bits of the pointer representation.
 ///
 /// This struct combines a pointer and flag information into a single `usize` value
@@ -170,6 +172,52 @@ where
             _marker: PhantomData,
         }
     }
+
+    /// Creates a new `FlaggedPtr` from a pointer and flags, returning an error if they overlap.
+    ///
+    /// # Arguments
+    /// - `ptr`: The pointer to store
+    /// - `flag`: The flags to encode in the unused bits
+    ///
+    /// # Returns
+    /// - `Ok(Self)` if the pointer and flag bits do not overlap
+    /// - `Err(FlagOverlapError)` if they do overlap
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    /// use std::ptr::NonNull;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(42);
+    /// let flagged = FlaggedPtr::try_new(boxed, MyFlags::A | MyFlags::B);
+    /// assert_eq!(flagged, Ok(FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B)));
+    /// 
+    /// let flagged = FlaggedPtr::try_new(boxed, MyFlags::A);
+    /// assert_eq!(flagged, Err(error::FlagOverlapError::new(P::mask(meta), F::mask())));
+    /// ```
+    pub fn try_new(ptr: P, flag: F) -> Result<Self, error::FlagOverlapError> {
+        let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
+        // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
+        if F::mask() & P::mask(meta) != 0 {
+            return Err(error::FlagOverlapError::new(P::mask(meta), F::mask()));
+        }
+        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
+        Ok(Self {
+            repr,
+            meta,
+            _marker: PhantomData,
+        })
+    }
 }
 
 impl<P, F, M> FlaggedPtr<P, F, M>
@@ -314,6 +362,89 @@ where
     pub fn as_ptr(&self) -> NonNull<P::Pointee> {
         let ptr_repr = self.ptr_repr();
         unsafe { P::map_pointee(ptr_repr, self.meta) }
+    }
+
+    /// Consumes this `FlaggedPtr` and returns the original pointer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let ptr = flagged.into_ptr();
+    /// assert_eq!(unsafe { *ptr.as_ref() }, 123);
+    /// ```
+    pub fn into_ptr(self) -> P {
+        let ptr_repr = self.ptr_repr();
+        unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) }
+    }
+
+    /// Consumes this `FlaggedPtr` and returns the original flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let flag = flagged.into_flag();
+    /// assert_eq!(flag, MyFlags::A | MyFlags::B);
+    /// ```
+    pub fn into_flag(self) -> F {
+        let flag_repr = self.ptr_repr().as_ptr() as usize & F::mask();
+        unsafe { F::from_usize(flag_repr) }
+    }
+
+    /// Replaces the flags of this `FlaggedPtr` with the given `new` flags.
+    ///
+    /// # Returns
+    /// The previous flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let prev_flag = flagged.replace_flag(MyFlags::B);
+    /// assert_eq!(prev_flag, MyFlags::A | MyFlags::B);
+    /// assert_eq!(flagged.into_flag(), MyFlags::B);
+    /// ```
+    pub fn replace_flag(&mut self, new: F) -> F{
+        let prev_flag=self.flag();
+        self.set_flag(new);
+        prev_flag
     }
 }
 
