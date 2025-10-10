@@ -131,3 +131,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 ### 0.1.2
 - implementation fix for `[T]` and `dyn T`
 - implementation for `fmt::Pointer` trait
+- add `FlaggedPtr::try_new` method
