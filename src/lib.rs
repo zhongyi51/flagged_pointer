@@ -210,7 +210,7 @@ where
     /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlags>,_>,_> = FlaggedPtr::try_new(boxed.clone(), MyFlags::A.into());
     /// assert!(flagged.is_ok());
     /// 
-    /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlagsInvalid>,_>,_> = FlaggedPtr::try_new(boxed.clone(), MyFlagsInvalid::B.into());
+    /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlagsInvalid>,_>,_> = FlaggedPtr::try_new(boxed, MyFlagsInvalid::B.into());
     /// assert!(flagged.is_err());
     /// ```
     pub fn try_new(ptr: P, flag: F) -> Result<Self, crate::error::FlagOverlapError> {
