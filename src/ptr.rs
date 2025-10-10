@@ -456,9 +456,9 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *const T;
-            unsafe { Rc::increment_strong_count(ptr) };
-            let slice = unsafe { std::slice::from_raw_parts(ptr, *meta) };
-            unsafe { Rc::from_raw(slice) }
+            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, *meta);
+            unsafe { Rc::increment_strong_count(slice_ptr) };
+            unsafe { Rc::from_raw(slice_ptr) }
         }
     }
 
@@ -496,9 +496,9 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *const T;
-            unsafe { Arc::increment_strong_count(ptr) };
-            let slice = unsafe { std::slice::from_raw_parts(ptr, *meta) };
-            unsafe { Arc::from_raw(slice) }
+            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, *meta);
+            unsafe { Arc::increment_strong_count(slice_ptr) };
+            unsafe { Arc::from_raw(slice_ptr) }
         }
     }
 
@@ -542,8 +542,9 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr();
-            unsafe { Rc::increment_strong_count(ptr) };
-            unsafe { Rc::from_raw(ptr_meta::from_raw_parts(ptr, meta.data)) }
+            let fat_ptr = ptr_meta::from_raw_parts_mut(ptr, meta.data);
+            unsafe { Rc::increment_strong_count(fat_ptr) };
+            unsafe { Rc::from_raw(fat_ptr) }
         }
     }
 
@@ -587,8 +588,9 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr();
-            unsafe { Arc::increment_strong_count(ptr) };
-            unsafe { Arc::from_raw(ptr_meta::from_raw_parts(ptr, meta.data)) }
+            let fat_ptr = ptr_meta::from_raw_parts_mut(ptr, meta.data);
+            unsafe { Arc::increment_strong_count(fat_ptr) };
+            unsafe { Arc::from_raw(fat_ptr) }
         }
     }
 }
