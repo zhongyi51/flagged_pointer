@@ -187,7 +187,7 @@ where
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
+    /// use enumflags2::{bitflags,BitFlags};
     /// use std::ptr::NonNull;
     ///
     /// #[bitflags]
@@ -197,19 +197,27 @@ where
     ///     A = 1 << 0,
     ///     B = 1 << 1,
     /// }
+    /// 
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlagsInvalid {
+    ///     A = 1 << 6,
+    ///     B = 1 << 7,
+    /// }
     ///
     /// let boxed = Box::new(42);
-    /// let flagged = FlaggedPtr::try_new(boxed, MyFlags::A | MyFlags::B);
-    /// assert_eq!(flagged, Ok(FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B)));
+    /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlags>,_>,_> = FlaggedPtr::try_new(boxed.clone(), MyFlags::A.into());
+    /// assert!(flagged.is_ok());
     /// 
-    /// let flagged = FlaggedPtr::try_new(boxed, MyFlags::A);
-    /// assert_eq!(flagged, Err(error::FlagOverlapError::new(P::mask(meta), F::mask())));
+    /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlagsInvalid>,_>,_> = FlaggedPtr::try_new(boxed.clone(), MyFlagsInvalid::B.into());
+    /// assert!(flagged.is_err());
     /// ```
-    pub fn try_new(ptr: P, flag: F) -> Result<Self, error::FlagOverlapError> {
+    pub fn try_new(ptr: P, flag: F) -> Result<Self, crate::error::FlagOverlapError> {
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
         // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
         if F::mask() & P::mask(meta) != 0 {
-            return Err(error::FlagOverlapError::new(P::mask(meta), F::mask()));
+            return Err(crate::error::FlagOverlapError::new(P::mask(meta), F::mask()));
         }
         let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
         Ok(Self {
@@ -387,7 +395,10 @@ where
     /// ```
     pub fn into_ptr(self) -> P {
         let ptr_repr = self.ptr_repr();
-        unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) }
+        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) };
+        // Prevent the destructor from running since we're taking ownership
+        mem::forget(self);
+        ptr
     }
 
     /// Consumes this `FlaggedPtr` and returns the original flags.
@@ -412,8 +423,8 @@ where
     /// assert_eq!(flag, MyFlags::A | MyFlags::B);
     /// ```
     pub fn into_flag(self) -> F {
-        let flag_repr = self.ptr_repr().as_ptr() as usize & F::mask();
-        unsafe { F::from_usize(flag_repr) }
+        let flag_repr = self.flag();
+        flag_repr
     }
 
     /// Replaces the flags of this `FlaggedPtr` with the given `new` flags.
@@ -425,7 +436,7 @@ where
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
+    /// use enumflags2::{BitFlags, bitflags};
     ///
     /// #[bitflags]
     /// #[repr(u8)]
@@ -436,10 +447,10 @@ where
     /// }
     ///
     /// let boxed = Box::new(123);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let prev_flag = flagged.replace_flag(MyFlags::B);
-    /// assert_eq!(prev_flag, MyFlags::A | MyFlags::B);
-    /// assert_eq!(flagged.into_flag(), MyFlags::B);
+    /// let mut flagged = FlaggedPtr::new(boxed.clone(), BitFlags::from(MyFlags::A | MyFlags::B));
+    /// let prev_flag = flagged.replace_flag(BitFlags::from(MyFlags::B));
+    /// assert_eq!(prev_flag, BitFlags::from(MyFlags::A | MyFlags::B));
+    /// assert_eq!(flagged.into_flag(), BitFlags::from(MyFlags::B));
     /// ```
     pub fn replace_flag(&mut self, new: F) -> F{
         let prev_flag=self.flag();
