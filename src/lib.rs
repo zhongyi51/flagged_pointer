@@ -550,6 +550,14 @@ where
 {
 }
 
+impl<P, F, M> StableDeref for FlaggedPtr<P, F, M>
+where
+    P: PtrMeta<M> + StableDeref,
+    F: FlagMeta,
+    M: Copy,
+{
+}
+
 /// Type aliases for common pointer combinations.
 ///
 /// This module provides convenient type aliases for using `FlaggedPtr`
@@ -791,5 +799,25 @@ mod tests {
         assert_eq!(ptr_from_thread.flag(), flags);
 
         assert_eq!(Arc::strong_count(&flagged_ptr.dissolve().0), 2);
+    }
+
+    #[test]
+    fn test_send_and_sync() {
+        let data = Arc::new(vec![10, 20, 30]);
+        let flags = TestFlag::A;
+
+        let flagged_ptr: FlaggedPtr<Arc<Vec<i32>>, BitFlags<TestFlag, u8>, ()> =
+            FlaggedPtr::new(data, flags.into());
+
+        let handle = std::thread::spawn(move || {
+            assert_eq!(flagged_ptr.flag(), TestFlag::A);
+            assert_eq!(flagged_ptr[1], 20);
+            flagged_ptr.dissolve()
+        });
+
+        let (ptr_out, flags_out) = handle.join().unwrap();
+        assert_eq!(flags_out, TestFlag::A);
+        assert_eq!(*ptr_out, vec![10, 20, 30]);
+        assert_eq!(Arc::strong_count(&ptr_out), 1);
     }
 }
