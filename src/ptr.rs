@@ -68,7 +68,7 @@ where
     ///
     /// # Safety
     /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
-    unsafe fn clone_storage(nz: NonNull<()>, meta: &M) -> Self
+    unsafe fn clone_storage(nz: NonNull<()>, meta: M) -> Self
     where
         Self: Clone;
 }
@@ -139,7 +139,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: &()) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
         where
             Self: Clone,
         {
@@ -175,11 +175,11 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &usize) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
         where
             Self: Clone,
         {
-            let ptr = ptr::slice_from_raw_parts_mut(nz.as_ptr() as *mut T, *meta);
+            let ptr = ptr::slice_from_raw_parts_mut(nz.as_ptr() as *mut T, meta);
             unsafe { NonNull::new_unchecked(ptr) }
         }
     }
@@ -218,7 +218,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &WithMaskMeta<T>) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
@@ -252,7 +252,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: &()) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
         where
             Self: Clone,
         {
@@ -291,12 +291,12 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &usize) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
         where
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *mut T;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, *meta) };
+            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, meta) };
             let boxed = unsafe { Box::from_raw(slice) };
             let cloned = boxed.clone();
             mem::forget(boxed);
@@ -339,7 +339,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &WithMaskMeta<T>) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
@@ -377,7 +377,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: &()) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
         where
             Self: Clone,
         {
@@ -412,7 +412,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: &()) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
         where
             Self: Clone,
         {
@@ -451,12 +451,12 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(slice) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &usize) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
         where
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *const T;
-            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, *meta);
+            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
             unsafe { Rc::increment_strong_count(slice_ptr) };
             unsafe { Rc::from_raw(slice_ptr) }
         }
@@ -491,12 +491,12 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(slice) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &usize) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
         where
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *const T;
-            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, *meta);
+            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
             unsafe { Arc::increment_strong_count(slice_ptr) };
             unsafe { Arc::from_raw(slice_ptr) }
         }
@@ -537,7 +537,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &WithMaskMeta<T>) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {
@@ -583,7 +583,7 @@ pub mod ptr_impl {
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
 
-        unsafe fn clone_storage(nz: NonNull<()>, meta: &WithMaskMeta<T>) -> Self
+        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
         where
             Self: Clone,
         {

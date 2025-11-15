@@ -516,7 +516,7 @@ where
 {
     fn clone(&self) -> Self {
         let ptr_repr = self.ptr_repr();
-        let cloned_ptr_storage = unsafe { P::clone_storage(ptr_repr, &self.meta) };
+        let cloned_ptr_storage = unsafe { P::clone_storage(ptr_repr, self.meta) };
         let flag = self.flag();
         Self::new(cloned_ptr_storage, flag)
     }
