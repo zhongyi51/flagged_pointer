@@ -507,6 +507,28 @@ where
     }
 }
 
+impl<P,F,M> AsRef<P::Pointee> for FlaggedPtr<P,F,M>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee>,
+    F: FlagMeta,
+    M: Copy,
+{
+    fn as_ref(&self) -> &P::Pointee {
+        self.deref()
+    }
+}
+
+impl<P,F,M> AsMut<P::Pointee> for FlaggedPtr<P,F,M>
+where
+    P: PtrMeta<M> + DerefMut<Target = P::Pointee>,
+    F: FlagMeta,
+    M: Copy,
+{
+    fn as_mut(&mut self) -> &mut P::Pointee {
+        self.deref_mut()
+    }
+}
+
 impl<P, F, M> Clone for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Clone,
