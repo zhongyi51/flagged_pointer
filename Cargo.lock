@@ -28,6 +28,7 @@ version = "0.1.2"
 dependencies = [
  "enumflags2",
  "ptr_meta",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -67,6 +68,12 @@ checksum = "1885c039570dc00dcb4ff087a89e185fd56bae234ddc7f056a945bf36467248d"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "stable_deref_trait"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "syn"

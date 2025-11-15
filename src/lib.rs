@@ -425,8 +425,7 @@ where
     /// assert_eq!(flag, MyFlags::A | MyFlags::B);
     /// ```
     pub fn into_flag(self) -> F {
-        let flag_repr = self.flag();
-        flag_repr
+        self.flag()
     }
 
     /// Replaces the flags of this `FlaggedPtr` with the given `new` flags.
@@ -550,9 +549,17 @@ where
 {
 }
 
-impl<P, F, M> StableDeref for FlaggedPtr<P, F, M>
+unsafe impl<P, F, M> stable_deref_trait::StableDeref for FlaggedPtr<P, F, M>
 where
-    P: PtrMeta<M> + StableDeref,
+    P: PtrMeta<M> + Deref<Target = P::Pointee> + stable_deref_trait::StableDeref,
+    F: FlagMeta,
+    M: Copy,
+{
+}
+
+unsafe impl<P, F, M> stable_deref_trait::CloneStableDeref for FlaggedPtr<P, F, M>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee> + stable_deref_trait::CloneStableDeref,
     F: FlagMeta,
     M: Copy,
 {
