@@ -7,13 +7,10 @@
 //! for implementing space-efficient data structures like tagged unions or specialized
 //! memory allocators.
 use std::{
-    marker::PhantomData,
-    mem,
-    ops::{Deref, DerefMut},
-    ptr::NonNull,
+    hash::Hash, marker::PhantomData, mem, ops::{Deref, DerefMut}, ptr::NonNull
 };
 
-use crate::{flag::FlagMeta, ptr::PtrMeta};
+use crate::{error::FlagOverlapError, flag::FlagMeta, ptr::PtrMeta};
 
 pub mod flag;
 pub mod ptr;
@@ -159,17 +156,15 @@ where
         // Static assert, which will be checked at compile time.
         #[allow(path_statements)]
         Self::_ASSERT;
-        let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
-        // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
-        assert!(
-            F::mask() & P::mask(meta) == 0,
-            "Pointer and flag bits overlap - this indicates an alignment issue or too many flag bits"
-        );
-        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
-        Self {
-            repr,
-            meta,
-            _marker: PhantomData,
+        let built=Self::try_new(ptr, flag);
+        match built {
+            Ok(ptr) => ptr,
+            Err(FlagOverlapError {
+                ptr_mask,
+                flag_mask,
+            }) => {
+                panic!("FlaggedPtr::new: pointer and flag bits overlap - this indicates an alignment issue or too many flag bits, ptr_mask: {:x}, flag_mask: {:x}", ptr_mask, flag_mask);
+            }
         }
     }
 
@@ -219,7 +214,7 @@ where
         if F::mask() & P::mask(meta) != 0 {
             // allowing drop origin pointer
             unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
-            return Err(crate::error::FlagOverlapError::new(P::mask(meta), F::mask()));
+            return Err(FlagOverlapError::new(P::mask(meta), F::mask()));
         }
         let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
         Ok(Self {
@@ -227,6 +222,19 @@ where
             meta,
             _marker: PhantomData,
         })
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that the pointer and flag bits do not overlap.
+    pub unsafe fn new_unchecked(ptr: P, flag: F) -> Self {
+        let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
+        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
+        Self {
+            repr,
+            meta,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -539,7 +547,8 @@ where
         let ptr_repr = self.ptr_repr();
         let cloned_ptr_storage = unsafe { P::clone_storage(ptr_repr, self.meta) };
         let flag = self.flag();
-        Self::new(cloned_ptr_storage, flag)
+        // the pointer we cloned is from a valid pointer, and the flag bits are not overlapped
+        unsafe { Self::new_unchecked(cloned_ptr_storage, flag) }
     }
 }
 
@@ -552,6 +561,54 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ptr = self.as_ptr();
         std::fmt::Pointer::fmt(&ptr, f)
+    }
+}
+
+impl<P,F,M> std::fmt::Debug for FlaggedPtr<P,F,M>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee>,
+    P::Pointee: std::fmt::Debug,
+    F: FlagMeta + std::fmt::Debug,
+    M: Copy,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FlaggedPtr({:?}, {:?})", self.as_ref(),self.flag())
+    }
+}
+
+impl<P,F,M> PartialEq for FlaggedPtr<P,F,M>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee>,
+    P::Pointee: PartialEq,
+    F: FlagMeta + PartialEq,
+    M: Copy,
+{
+    fn eq(&self, other: &Self) -> bool {
+        let left_ref = self.as_ref();
+        let right_ref = other.as_ref();
+        (left_ref == right_ref) && (self.flag() == other.flag())
+    }
+}
+
+impl<P,F,M> Eq for FlaggedPtr<P,F,M>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee>,
+    P::Pointee: Eq,
+    F: FlagMeta + Eq,
+    M: Copy,
+{
+}
+
+impl<P,F,M> Hash for FlaggedPtr<P,F,M>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee>,
+    P::Pointee: Hash,
+    F: FlagMeta + Hash,
+    M: Copy,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_ref().hash(state);
+        self.flag().hash(state);
     }
 }
 

@@ -135,4 +135,5 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ### 0.1.3
 - more traits implementation
-- remove unnecessary `unwrap`
+- remove unnecessary `unwrap` and check
+- some bugfix
