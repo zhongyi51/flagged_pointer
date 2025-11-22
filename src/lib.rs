@@ -7,14 +7,18 @@
 //! for implementing space-efficient data structures like tagged unions or specialized
 //! memory allocators.
 use std::{
-    hash::Hash, marker::PhantomData, mem, ops::{Deref, DerefMut}, ptr::NonNull
+    hash::Hash,
+    marker::PhantomData,
+    mem,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
 };
 
-use crate::{error::FlagOverlapError, flag::FlagMeta, ptr::PtrMeta};
+use crate::{error::FlaggedPointerError, flag::FlagMeta, ptr::PtrMeta};
 
+pub mod error;
 pub mod flag;
 pub mod ptr;
-pub mod error;
 
 /// A pointer that stores flags within unused bits of the pointer representation.
 ///
@@ -156,14 +160,11 @@ where
         // Static assert, which will be checked at compile time.
         #[allow(path_statements)]
         Self::_ASSERT;
-        let built=Self::try_new(ptr, flag);
+        let built = Self::try_new(ptr, flag);
         match built {
             Ok(ptr) => ptr,
-            Err(FlagOverlapError {
-                ptr_mask,
-                flag_mask,
-            }) => {
-                panic!("FlaggedPtr::new: pointer and flag bits overlap - this indicates an alignment issue or too many flag bits, ptr_mask: {:x}, flag_mask: {:x}", ptr_mask, flag_mask);
+            Err(e) => {
+                panic!("FlaggedPtr::new: {:?}", e);
             }
         }
     }
@@ -192,7 +193,7 @@ where
     ///     A = 1 << 0,
     ///     B = 1 << 1,
     /// }
-    /// 
+    ///
     /// #[bitflags]
     /// #[repr(u8)]
     /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -204,19 +205,35 @@ where
     /// let boxed = Box::new(42);
     /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlags>,_>,_> = FlaggedPtr::try_new(boxed.clone(), MyFlags::A.into());
     /// assert!(flagged.is_ok());
-    /// 
+    ///
     /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlagsInvalid>,_>,_> = FlaggedPtr::try_new(boxed, MyFlagsInvalid::B.into());
     /// assert!(flagged.is_err());
     /// ```
-    pub fn try_new(ptr: P, flag: F) -> Result<Self, crate::error::FlagOverlapError> {
+    pub fn try_new(ptr: P, flag: F) -> Result<Self, FlaggedPointerError> {
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
         // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
         if F::mask() & P::mask(meta) != 0 {
             // allowing drop origin pointer
             unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
-            return Err(FlagOverlapError::new(P::mask(meta), F::mask()));
+            return Err(FlaggedPointerError::FlagOverlap {
+                ptr_mask: P::mask(meta),
+                flag_mask: F::mask(),
+            });
         }
-        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
+        // We cannot guarantee that the pointer is properly aligned,
+        // so we need to check the flag bits against the pointer address.
+        let flag_mask = F::mask();
+        let and_res = ptr.as_ptr().map_addr(|addr| addr & flag_mask) as usize;
+        if and_res != 0 {
+            // allowing drop origin pointer
+            unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
+            return Err(FlaggedPointerError::Misalignment {
+                ptr_addr: and_res,
+                flag_mask,
+            });
+        }
+        let repr =
+            unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize())) };
         Ok(Self {
             repr,
             meta,
@@ -229,7 +246,8 @@ where
     /// The caller must ensure that the pointer and flag bits do not overlap.
     pub unsafe fn new_unchecked(ptr: P, flag: F) -> Self {
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
-        let repr = unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize()))};
+        let repr =
+            unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize())) };
         Self {
             repr,
             meta,
@@ -337,9 +355,7 @@ where
         // 1. The pointer was originally created from a valid P
         // 2. We've masked out the flag bits, leaving only valid pointer bits
         // 3. The metadata is preserved from construction
-        let ptr = unsafe {
-            P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta)
-        };
+        let ptr = unsafe { P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta) };
         let flag = unsafe { F::from_usize(flag_repr) };
 
         // Prevent the destructor from running since we're taking ownership
@@ -348,7 +364,10 @@ where
     }
 
     fn ptr_repr(&self) -> NonNull<()> {
-        let ptr_val = self.repr.as_ptr().map_addr(|addr| addr & P::mask(self.meta)); 
+        let ptr_val = self
+            .repr
+            .as_ptr()
+            .map_addr(|addr| addr & P::mask(self.meta));
         unsafe { NonNull::new_unchecked(ptr_val) }
     }
 
@@ -461,8 +480,8 @@ where
     /// assert_eq!(prev_flag, BitFlags::from(MyFlags::A | MyFlags::B));
     /// assert_eq!(flagged.into_flag(), BitFlags::from(MyFlags::B));
     /// ```
-    pub fn replace_flag(&mut self, new: F) -> F{
-        let prev_flag=self.flag();
+    pub fn replace_flag(&mut self, new: F) -> F {
+        let prev_flag = self.flag();
         self.set_flag(new);
         prev_flag
     }
@@ -515,7 +534,7 @@ where
     }
 }
 
-impl<P,F,M> AsRef<P::Pointee> for FlaggedPtr<P,F,M>
+impl<P, F, M> AsRef<P::Pointee> for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     F: FlagMeta,
@@ -526,7 +545,7 @@ where
     }
 }
 
-impl<P,F,M> AsMut<P::Pointee> for FlaggedPtr<P,F,M>
+impl<P, F, M> AsMut<P::Pointee> for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + DerefMut<Target = P::Pointee>,
     F: FlagMeta,
@@ -564,7 +583,7 @@ where
     }
 }
 
-impl<P,F,M> std::fmt::Debug for FlaggedPtr<P,F,M>
+impl<P, F, M> std::fmt::Debug for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: std::fmt::Debug,
@@ -572,11 +591,11 @@ where
     M: Copy,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FlaggedPtr({:?}, {:?})", self.as_ref(),self.flag())
+        write!(f, "FlaggedPtr({:?}, {:?})", self.as_ref(), self.flag())
     }
 }
 
-impl<P,F,M> PartialEq for FlaggedPtr<P,F,M>
+impl<P, F, M> PartialEq for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: PartialEq,
@@ -590,7 +609,7 @@ where
     }
 }
 
-impl<P,F,M> Eq for FlaggedPtr<P,F,M>
+impl<P, F, M> Eq for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: Eq,
@@ -599,7 +618,7 @@ where
 {
 }
 
-impl<P,F,M> Hash for FlaggedPtr<P,F,M>
+impl<P, F, M> Hash for FlaggedPtr<P, F, M>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: Hash,

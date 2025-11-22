@@ -50,7 +50,7 @@ pub unsafe trait FlagMeta: Copy {
     fn to_usize(self) -> usize;
 
     /// Converts a `usize` back to the flag type.
-    /// 
+    ///
     /// # Safety
     /// The caller must ensure that `nz` contains only valid flag bits.
     unsafe fn from_usize(nz: usize) -> Self;

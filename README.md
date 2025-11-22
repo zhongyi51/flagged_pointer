@@ -137,3 +137,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - more traits implementation
 - remove unnecessary `unwrap` and check
 - some bugfix
+- better error handling with `thiserror` crate
