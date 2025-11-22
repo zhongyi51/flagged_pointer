@@ -741,7 +741,7 @@ pub mod alias {
 
 #[cfg(test)]
 mod tests {
-    use crate::alias::FlaggedBoxSlice;
+    use crate::alias::{FlaggedBoxSlice, FlaggedNonNull, FlaggedNonNullSlice};
 
     use super::*;
     use enumflags2::{BitFlags, bitflags};
@@ -754,6 +754,69 @@ mod tests {
         A = 1 << 0, // 0b001
         B = 1 << 1, // 0b010
         C = 1 << 2, // 0b100
+    }
+
+     #[test]
+    fn test_nonnull_basic() {
+        let mut data = 123_u64;
+        let raw_ptr = unsafe { NonNull::new_unchecked(&mut data as *mut _) };
+        let flags = TestFlag::A | TestFlag::B;
+
+        let mut flagged: FlaggedNonNull<u64, BitFlags<TestFlag>> = 
+            FlaggedNonNull::new(raw_ptr, flags.into());
+
+        unsafe {
+            assert_eq!(*flagged.as_ptr().as_ref(), 123);
+            *flagged.as_ptr().as_mut() = 456;
+        }
+        assert_eq!(data, 456); 
+        assert_eq!(flagged.flag(), flags);
+        flagged.set_flag(TestFlag::C.into());
+        assert_eq!(flagged.flag(), TestFlag::C);
+        let (ptr_out, flag_out) = flagged.dissolve();
+        assert_eq!(flag_out, TestFlag::C);
+        assert_eq!(ptr_out, raw_ptr);
+    }
+
+    #[test]
+    fn test_nonnull_slice() {
+        let mut vec_data = vec![10, 20, 30, 40];
+        let slice_ptr = NonNull::new(vec_data.as_mut_slice()).unwrap();
+        let flags = TestFlag::B;
+        let flagged: FlaggedNonNullSlice<u64, BitFlags<TestFlag>> = 
+            FlaggedNonNullSlice::new(slice_ptr, flags.into());
+
+        unsafe {
+            let slice = flagged.as_ptr().as_ref();
+            assert_eq!(slice.len(), 4);
+            assert_eq!(slice[1], 20);
+            flagged.as_ptr().as_mut()[1] = 999;
+        }
+        assert_eq!(vec_data[1], 999);
+        assert_eq!(flagged.flag(), flags);
+        let (ptr_out, flag_out) = flagged.dissolve();
+        assert_eq!(flag_out, flags);
+        assert_eq!(ptr_out.len(), 4);
+    }
+
+    #[test]
+    fn test_nonnull_dangling() {
+        let dangling = NonNull::<u64>::dangling();
+        let flags = TestFlag::A | TestFlag::C;
+        let flagged = FlaggedNonNull::new(dangling, flags.into());
+        assert_eq!(flagged.flag(), flags);
+        let (ptr_out, _): (NonNull<u64>, BitFlags<TestFlag>) = flagged.dissolve();
+        assert_eq!(ptr_out, dangling);
+    }
+
+    #[test]
+    #[should_panic(expected = "Misalignment")]
+    fn test_nonnull_misaligned() {
+        let val = 10u64;
+        let ptr_addr = &val as *const _ as usize;
+        let bad_addr = ptr_addr | 1; 
+        let bad_ptr = unsafe { NonNull::new_unchecked(bad_addr as *mut u64) };
+        let _: FlaggedNonNull<u64, BitFlags<TestFlag>> = FlaggedNonNull::new(bad_ptr, TestFlag::B.into());
     }
 
     #[test]
