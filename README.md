@@ -132,3 +132,7 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - implementation fix for `[T]` and `dyn T`
 - implementation for `fmt::Pointer` trait
 - add `FlaggedPtr::try_new` method
+
+### 0.1.3
+- more traits implementation
+- remove unnecessary `unwrap`

@@ -202,8 +202,9 @@ pub mod ptr_impl {
             let align = meta.align_of();
             let align_bits = align.ilog2() as usize;
             let mask = usize::MAX << align_bits;
+            // our pointer is from `NonNull`
             (
-                NonNull::new(ptr as *mut ()).unwrap(),
+                unsafe { NonNull::new_unchecked(ptr as *mut ()) },
                 WithMaskMeta { data: meta, mask },
             )
         }
@@ -323,8 +324,9 @@ pub mod ptr_impl {
             let align = meta.align_of();
             let align_bits = align.ilog2() as usize;
             let mask = usize::MAX << align_bits;
+            // our pointer is from `NonNull`
             (
-                NonNull::new(raw_ptr as *mut ()).unwrap(),
+                unsafe { NonNull::new_unchecked(raw_ptr as *mut ()) },
                 WithMaskMeta { data: meta, mask },
             )
         }
@@ -521,8 +523,9 @@ pub mod ptr_impl {
             let align = meta.align_of();
             let align_bits = align.ilog2() as usize;
             let mask = usize::MAX << align_bits;
+            // our pointer is from `NonNull`
             (
-                NonNull::new(raw_ptr as *mut ()).unwrap(),
+                unsafe { NonNull::new_unchecked(raw_ptr as *mut ()) },
                 WithMaskMeta { data: meta, mask },
             )
         }
@@ -567,8 +570,9 @@ pub mod ptr_impl {
             let align = meta.align_of();
             let align_bits = align.ilog2() as usize;
             let mask = usize::MAX << align_bits;
+            // our pointer is from `NonNull`
             (
-                NonNull::new(raw_ptr as *mut ()).unwrap(),
+                unsafe { NonNull::new_unchecked(raw_ptr as *mut ()) },
                 WithMaskMeta { data: meta, mask },
             )
         }
