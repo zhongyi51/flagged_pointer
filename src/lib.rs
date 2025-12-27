@@ -223,12 +223,12 @@ where
         // We cannot guarantee that the pointer is properly aligned,
         // so we need to check the flag bits against the pointer address.
         let flag_mask = F::mask();
-        let and_res = ptr.as_ptr().map_addr(|addr| addr & flag_mask) as usize;
-        if and_res != 0 {
+        let ptr_addr = ptr.as_ptr() as usize;
+        if ptr_addr & flag_mask != 0 {
             // allowing drop origin pointer
             unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
             return Err(FlaggedPointerError::Misalignment {
-                ptr_addr: and_res,
+                ptr_addr,
                 flag_mask,
             });
         }
