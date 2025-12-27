@@ -434,7 +434,7 @@ pub mod ptr_impl {
         type Pointee = [T];
 
         fn to_pointee_ptr_and_meta(self) -> (NonNull<()>, usize) {
-            let len= self.len();
+            let len = self.len();
             let ptr_slice = Rc::into_raw(self);
             let ptr = ptr_slice as *const T as *mut T;
             let nz = unsafe { NonNull::new_unchecked(ptr as *mut ()) };

@@ -222,14 +222,13 @@ where
         }
         // We cannot guarantee that the pointer is properly aligned,
         // so we need to check the flag bits against the pointer address.
-        let flag_mask = F::mask();
         let ptr_addr = ptr.as_ptr() as usize;
-        if ptr_addr & flag_mask != 0 {
+        if ptr_addr & F::mask() != 0 {
             // allowing drop origin pointer
             unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
             return Err(FlaggedPointerError::Misalignment {
                 ptr_addr,
-                flag_mask,
+                flag_mask: F::mask(),
             });
         }
         let repr =
@@ -319,6 +318,61 @@ where
         self.repr = ptr_repr.map_addr(|addr| addr | flag_repr);
     }
 
+    /// Sets a new pointer for this `FlaggedPtr`, while preserving the current flags.
+    ///
+    /// # Arguments
+    /// - `ptr`: The new pointer to set
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let mut flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// flagged.try_set_pointer(Box::new(456)).unwrap();
+    /// assert_eq!(*flagged.into_ptr(), 456);
+    /// ```
+    pub fn try_set_pointer(&mut self, ptr: P) -> Result<(), FlaggedPointerError> {
+        let current_flag = self.flag();
+        let (ptr_repr, meta) = ptr.to_pointee_ptr_and_meta();
+
+        if (P::mask(meta) & F::mask()) != 0 {
+            unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
+            return Err(FlaggedPointerError::FlagOverlap {
+                ptr_mask: P::mask(meta),
+                flag_mask: F::mask(),
+            });
+        }
+
+        let ptr_addr = ptr_repr.as_ptr() as usize;
+        if ptr_addr & F::mask() != 0 {
+            unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
+            return Err(FlaggedPointerError::Misalignment {
+                ptr_addr,
+                flag_mask: F::mask(),
+            });
+        }
+
+        let old_ptr_repr = self.ptr_repr();
+        unsafe {
+            let _ = P::from_pointee_ptr_and_meta(old_ptr_repr, self.meta);
+        }
+
+        self.repr = ptr_repr.map_addr(|addr| addr | current_flag.to_usize());
+        self.meta = meta;
+        Ok(())
+    }
+
     /// Consumes this `FlaggedPtr` and returns the original pointer and flags.
     ///
     /// This is the inverse operation of `new()`.
@@ -401,6 +455,31 @@ where
         unsafe { P::map_pointee(ptr_repr, self.meta) }
     }
 
+    /// Consumes this `FlaggedPtr` and returns the original flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let flag = flagged.into_flag();
+    /// assert_eq!(flag, MyFlags::A | MyFlags::B);
+    /// ```
+    pub fn into_flag(self) -> F {
+        self.flag()
+    }
+
     /// Consumes this `FlaggedPtr` and returns the original pointer.
     ///
     /// # Examples
@@ -428,31 +507,6 @@ where
         // Prevent the destructor from running since we're taking ownership
         mem::forget(self);
         ptr
-    }
-
-    /// Consumes this `FlaggedPtr` and returns the original flags.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(123);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let flag = flagged.into_flag();
-    /// assert_eq!(flag, MyFlags::A | MyFlags::B);
-    /// ```
-    pub fn into_flag(self) -> F {
-        self.flag()
     }
 
     /// Replaces the flags of this `FlaggedPtr` with the given `new` flags.
@@ -484,6 +538,63 @@ where
         let prev_flag = self.flag();
         self.set_flag(new);
         prev_flag
+    }
+
+    /// Replaces the pointer of this `FlaggedPtr` with the given `new` pointer.
+    ///
+    /// # Returns
+    /// The previous pointer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let mut flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let prev_ptr = flagged.try_replace_ptr(Box::new(456)).unwrap();
+    /// assert_eq!(*prev_ptr, 123);
+    /// assert_eq!(*flagged.into_ptr(), 456);
+    /// ```
+    ///
+    pub fn try_replace_ptr(&mut self, new: P) -> Result<P, FlaggedPointerError> {
+        let (new_ptr_repr, new_meta) = new.to_pointee_ptr_and_meta();
+        if (P::mask(new_meta) & F::mask()) != 0 {
+            unsafe {
+                P::from_pointee_ptr_and_meta(new_ptr_repr, new_meta);
+            }
+            return Err(FlaggedPointerError::FlagOverlap {
+                ptr_mask: P::mask(new_meta),
+                flag_mask: F::mask(),
+            });
+        }
+
+        let new_ptr_addr = new_ptr_repr.as_ptr() as usize;
+        if (new_ptr_addr & F::mask()) != 0 {
+            unsafe {
+                P::from_pointee_ptr_and_meta(new_ptr_repr, new_meta);
+            }
+            return Err(FlaggedPointerError::Misalignment {
+                ptr_addr: new_ptr_addr,
+                flag_mask: F::mask(),
+            });
+        }
+
+        let ptr_repr = self.ptr_repr();
+        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) };
+
+        self.repr = new_ptr_repr.map_addr(|addr| addr | self.flag().to_usize());
+        self.meta = new_meta;
+        Ok(ptr)
     }
 }
 
@@ -756,20 +867,20 @@ mod tests {
         C = 1 << 2, // 0b100
     }
 
-     #[test]
+    #[test]
     fn test_nonnull_basic() {
         let mut data = 123_u64;
         let raw_ptr = unsafe { NonNull::new_unchecked(&mut data as *mut _) };
         let flags = TestFlag::A | TestFlag::B;
 
-        let mut flagged: FlaggedNonNull<u64, BitFlags<TestFlag>> = 
+        let mut flagged: FlaggedNonNull<u64, BitFlags<TestFlag>> =
             FlaggedNonNull::new(raw_ptr, flags.into());
 
         unsafe {
             assert_eq!(*flagged.as_ptr().as_ref(), 123);
             *flagged.as_ptr().as_mut() = 456;
         }
-        assert_eq!(data, 456); 
+        assert_eq!(data, 456);
         assert_eq!(flagged.flag(), flags);
         flagged.set_flag(TestFlag::C.into());
         assert_eq!(flagged.flag(), TestFlag::C);
@@ -783,7 +894,7 @@ mod tests {
         let mut vec_data = vec![10, 20, 30, 40];
         let slice_ptr = NonNull::new(vec_data.as_mut_slice()).unwrap();
         let flags = TestFlag::B;
-        let flagged: FlaggedNonNullSlice<u64, BitFlags<TestFlag>> = 
+        let flagged: FlaggedNonNullSlice<u64, BitFlags<TestFlag>> =
             FlaggedNonNullSlice::new(slice_ptr, flags.into());
 
         unsafe {
@@ -814,9 +925,10 @@ mod tests {
     fn test_nonnull_misaligned() {
         let val = 10u64;
         let ptr_addr = &val as *const _ as usize;
-        let bad_addr = ptr_addr | 1; 
+        let bad_addr = ptr_addr | 1;
         let bad_ptr = unsafe { NonNull::new_unchecked(bad_addr as *mut u64) };
-        let _: FlaggedNonNull<u64, BitFlags<TestFlag>> = FlaggedNonNull::new(bad_ptr, TestFlag::B.into());
+        let _: FlaggedNonNull<u64, BitFlags<TestFlag>> =
+            FlaggedNonNull::new(bad_ptr, TestFlag::B.into());
     }
 
     #[test]
