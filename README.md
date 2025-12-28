@@ -138,3 +138,7 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - remove unnecessary `unwrap` and check
 - some bugfix
 - better error handling with `thiserror` crate
+
+### 0.2
+- improve methods
+- more tests
