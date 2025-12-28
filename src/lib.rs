@@ -209,15 +209,16 @@ where
     /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlagsInvalid>,_>,_> = FlaggedPtr::try_new(boxed, MyFlagsInvalid::B.into());
     /// assert!(flagged.is_err());
     /// ```
-    pub fn try_new(ptr: P, flag: F) -> Result<Self, FlaggedPointerError> {
+    pub fn try_new(ptr: P, flag: F) -> Result<Self, FlaggedPointerError<P>> {
         let (ptr, meta) = ptr.to_pointee_ptr_and_meta();
         // Runtime assert, which will be checked at runtime, for `dyn XXX` types.
         if F::mask() & P::mask(meta) != 0 {
             // allowing drop origin pointer
-            unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
+            let origin_ptr = unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
             return Err(FlaggedPointerError::FlagOverlap {
                 ptr_mask: P::mask(meta),
                 flag_mask: F::mask(),
+                origin_pointer: origin_ptr,
             });
         }
         // We cannot guarantee that the pointer is properly aligned,
@@ -225,10 +226,11 @@ where
         let ptr_addr = ptr.as_ptr() as usize;
         if ptr_addr & F::mask() != 0 {
             // allowing drop origin pointer
-            unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
+            let origin_ptr = unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
             return Err(FlaggedPointerError::Misalignment {
                 ptr_addr,
                 flag_mask: F::mask(),
+                origin_pointer: origin_ptr,
             });
         }
         let repr =
@@ -312,10 +314,12 @@ where
     /// flagged.set_flag(MyFlags::B.into());
     /// assert_eq!(flagged.flag(), MyFlags::B);
     /// ```
-    pub fn set_flag(&mut self, flag: F) {
+    pub fn set_flag(&mut self, flag: F) -> F {
+        let old_flag = self.flag();
         let flag_repr = flag.to_usize();
         let ptr_repr = self.ptr_repr();
         self.repr = ptr_repr.map_addr(|addr| addr | flag_repr);
+        old_flag
     }
 
     /// Sets a new pointer for this `FlaggedPtr`, while preserving the current flags.
@@ -342,35 +346,37 @@ where
     /// flagged.try_set_pointer(Box::new(456)).unwrap();
     /// assert_eq!(*flagged.into_ptr(), 456);
     /// ```
-    pub fn try_set_pointer(&mut self, ptr: P) -> Result<(), FlaggedPointerError> {
+    pub fn try_set_pointer(&mut self, ptr: P) -> Result<P, FlaggedPointerError<P>> {
         let current_flag = self.flag();
         let (ptr_repr, meta) = ptr.to_pointee_ptr_and_meta();
 
         if (P::mask(meta) & F::mask()) != 0 {
-            unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
+            let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
             return Err(FlaggedPointerError::FlagOverlap {
                 ptr_mask: P::mask(meta),
                 flag_mask: F::mask(),
+                origin_pointer,
             });
         }
 
         let ptr_addr = ptr_repr.as_ptr() as usize;
         if ptr_addr & F::mask() != 0 {
-            unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
+            let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
             return Err(FlaggedPointerError::Misalignment {
                 ptr_addr,
                 flag_mask: F::mask(),
+                origin_pointer,
             });
         }
 
         let old_ptr_repr = self.ptr_repr();
-        unsafe {
-            let _ = P::from_pointee_ptr_and_meta(old_ptr_repr, self.meta);
-        }
+        let old_pointer=unsafe {
+            P::from_pointee_ptr_and_meta(old_ptr_repr, self.meta)
+        };
 
         self.repr = ptr_repr.map_addr(|addr| addr | current_flag.to_usize());
         self.meta = meta;
-        Ok(())
+        Ok(old_pointer)
     }
 
     /// Consumes this `FlaggedPtr` and returns the original pointer and flags.
@@ -509,93 +515,6 @@ where
         ptr
     }
 
-    /// Replaces the flags of this `FlaggedPtr` with the given `new` flags.
-    ///
-    /// # Returns
-    /// The previous flags.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::{BitFlags, bitflags};
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(123);
-    /// let mut flagged = FlaggedPtr::new(boxed.clone(), BitFlags::from(MyFlags::A | MyFlags::B));
-    /// let prev_flag = flagged.replace_flag(BitFlags::from(MyFlags::B));
-    /// assert_eq!(prev_flag, BitFlags::from(MyFlags::A | MyFlags::B));
-    /// assert_eq!(flagged.into_flag(), BitFlags::from(MyFlags::B));
-    /// ```
-    pub fn replace_flag(&mut self, new: F) -> F {
-        let prev_flag = self.flag();
-        self.set_flag(new);
-        prev_flag
-    }
-
-    /// Replaces the pointer of this `FlaggedPtr` with the given `new` pointer.
-    ///
-    /// # Returns
-    /// The previous pointer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(123);
-    /// let mut flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let prev_ptr = flagged.try_replace_ptr(Box::new(456)).unwrap();
-    /// assert_eq!(*prev_ptr, 123);
-    /// assert_eq!(*flagged.into_ptr(), 456);
-    /// ```
-    ///
-    pub fn try_replace_ptr(&mut self, new: P) -> Result<P, FlaggedPointerError> {
-        let (new_ptr_repr, new_meta) = new.to_pointee_ptr_and_meta();
-        if (P::mask(new_meta) & F::mask()) != 0 {
-            unsafe {
-                P::from_pointee_ptr_and_meta(new_ptr_repr, new_meta);
-            }
-            return Err(FlaggedPointerError::FlagOverlap {
-                ptr_mask: P::mask(new_meta),
-                flag_mask: F::mask(),
-            });
-        }
-
-        let new_ptr_addr = new_ptr_repr.as_ptr() as usize;
-        if (new_ptr_addr & F::mask()) != 0 {
-            unsafe {
-                P::from_pointee_ptr_and_meta(new_ptr_repr, new_meta);
-            }
-            return Err(FlaggedPointerError::Misalignment {
-                ptr_addr: new_ptr_addr,
-                flag_mask: F::mask(),
-            });
-        }
-
-        let ptr_repr = self.ptr_repr();
-        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) };
-
-        self.repr = new_ptr_repr.map_addr(|addr| addr | self.flag().to_usize());
-        self.meta = new_meta;
-        Ok(ptr)
-    }
 }
 
 impl<P, F, M> Deref for FlaggedPtr<P, F, M>
