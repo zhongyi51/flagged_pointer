@@ -139,6 +139,6 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - some bugfix
 - better error handling with `thiserror` crate
 
-### 0.2
+### 0.2.0
 - improved methods
 - more tests
