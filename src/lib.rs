@@ -771,10 +771,13 @@ pub mod alias {
 
 #[cfg(test)]
 mod tests {
-    use crate::alias::{FlaggedBoxSlice, FlaggedNonNull, FlaggedNonNullSlice};
+    use crate::alias::{FlaggedBox, FlaggedBoxSlice, FlaggedNonNull, FlaggedNonNullSlice};
 
     use super::*;
     use enumflags2::{BitFlags, bitflags};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::rc::Rc;
     use std::sync::Arc;
 
     #[bitflags]
@@ -1018,5 +1021,114 @@ mod tests {
         assert_eq!(flags_out, TestFlag::A);
         assert_eq!(*ptr_out, vec![10, 20, 30]);
         assert_eq!(Arc::strong_count(&ptr_out), 1);
+    }
+
+    #[test]
+    fn test_hash_consistency() {
+        let data1 = Box::new(100u64);
+        let data2 = Box::new(100u64);
+        let flags = TestFlag::A | TestFlag::C;
+        
+        let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data1, flags.into());
+        let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data2, flags.into());
+        
+        let mut hasher1 = DefaultHasher::new();
+        let mut hasher2 = DefaultHasher::new();
+        
+        flagged1.hash(&mut hasher1);
+        flagged2.hash(&mut hasher2);
+        
+        assert_eq!(hasher1.finish(), hasher2.finish());
+    }
+
+    #[test]
+    fn test_partial_eq_different_flags() {
+        let data1 = Box::new(50u64);
+        let data2 = Box::new(50u64);
+        
+        let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data1, TestFlag::A.into());
+        let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data2, TestFlag::B.into());
+        
+        assert_ne!(flagged1, flagged2);
+    }
+
+    #[test]
+    fn test_set_pointer_with_same_flags() {
+        let mut data1 = 10u64;
+        let mut data2 = 20u64;
+        let ptr1 = Box::new(&mut data1);
+        let ptr2 = Box::new(&mut data2);
+        let flags = TestFlag::A | TestFlag::B;
+        
+        let mut flagged: FlaggedBox<&mut u64, BitFlags<TestFlag>> = FlaggedBox::new(ptr1, flags.into());
+        assert_eq!(**flagged, 10);
+        
+        let old_ptr = flagged.try_set_pointer(ptr2).unwrap();
+        assert_eq!(**flagged, 20);
+        assert_eq!(flagged.flag(), flags);
+        assert_eq!(**old_ptr, 10);
+    }
+
+    #[test]
+    fn test_set_pointer_overlap_error() {
+        let data = Box::new(30u64);
+        let flags = TestFlag::A;
+        let mut flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
+        
+        let result = flagged.try_set_pointer(Box::new(40u64));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_as_ref_and_as_mut() {
+        let data = Box::new(77u64);
+        let flags = TestFlag::B | TestFlag::C;
+        let mut flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
+        
+        let ref_data = flagged.as_ref();
+        assert_eq!(*ref_data, 77);
+        
+        let mut_ref = flagged.as_mut();
+        *mut_ref = 88;
+        assert_eq!(*flagged, 88);
+    }
+
+    #[test]
+    fn test_rc_operations() {
+        let data = Rc::new(99u64);
+        let flags = TestFlag::A | TestFlag::C;
+        let flagged: FlaggedPtr<Rc<u64>, BitFlags<TestFlag>, ()> = FlaggedPtr::new(data, flags.into());
+        
+        assert_eq!(*flagged, 99);
+        assert_eq!(flagged.flag(), flags);
+        
+        let cloned = flagged.clone();
+        assert_eq!(*cloned, 99);
+        assert_eq!(cloned.flag(), flags);
+        
+        let (ptr_out, flags_out) = flagged.dissolve();
+        assert_eq!(flags_out, flags);
+        assert_eq!(*ptr_out, 99);
+        assert_eq!(Rc::strong_count(&ptr_out), 2);
+    }
+
+    #[test]
+    fn test_zero_flags() {
+        let data = Box::new(123u64);
+        let flags = BitFlags::<TestFlag>::empty();
+        let flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags);
+        
+        assert_eq!(flagged.flag(), flags);
+        assert_eq!(*flagged, 123);
+    }
+
+    #[test]
+    fn test_all_flags() {
+        let data = Box::new(456u64);
+        let flags = TestFlag::A | TestFlag::B | TestFlag::C;
+        let flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
+        
+        assert_eq!(flagged.flag(), flags);
+        assert_eq!(*flagged, 456);
     }
 }
