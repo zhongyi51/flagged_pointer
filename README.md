@@ -140,5 +140,5 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - better error handling with `thiserror` crate
 
 ### 0.2
-- improve methods
+- improved methods
 - more tests
