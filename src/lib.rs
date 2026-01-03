@@ -7,18 +7,20 @@
 //! for implementing space-efficient data structures like tagged unions or specialized
 //! memory allocators.
 use std::{
-    hash::Hash,
-    marker::PhantomData,
-    mem,
-    ops::{Deref, DerefMut},
-    ptr::NonNull,
+    hash::Hash, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::NonNull, sync::atomic::AtomicPtr
 };
 
-use crate::{error::FlaggedPointerError, flag::FlagMeta, ptr::PtrMeta};
+use crate::{
+    error::FlaggedPointerError,
+    flag::FlagMeta,
+    ptr::PtrMeta,
+    repr_storage::{AtomicPointerStorage, PointerStorage},
+};
 
 pub mod error;
 pub mod flag;
 pub mod ptr;
+pub mod repr_storage;
 
 /// A pointer that stores flags within unused bits of the pointer representation.
 ///
@@ -34,6 +36,7 @@ pub mod ptr;
 ///
 /// ```
 /// use flagged_pointer::FlaggedPtr;
+/// use flagged_pointer::alias::FlaggedBox;
 /// use enumflags2::{bitflags, BitFlags};
 ///
 /// #[bitflags]
@@ -46,7 +49,7 @@ pub mod ptr;
 /// }
 ///
 /// let boxed = Box::new("hello");
-/// let flagged = FlaggedPtr::new(boxed, Color::Red | Color::Blue);
+/// let flagged = FlaggedBox::new(boxed, Color::Red | Color::Blue);
 ///
 /// assert_eq!(*flagged, "hello");
 /// assert_eq!(flagged.flag(), Color::Red | Color::Blue);
@@ -92,17 +95,18 @@ pub mod ptr;
 /// trait_obj.method();
 ///
 /// ```
-pub struct FlaggedPtr<P, F, M>
+pub struct FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M>,
     F: FlagMeta,
     M: Copy,
+    S: PointerStorage,
 {
     /// The combined pointer and flag representation.
     ///
     /// This stores both the actual pointer value and the flag bits.
     /// The unused bits due to alignment are used for flags.
-    repr: NonNull<()>,
+    repr: S,
 
     /// Metadata associated with the pointer.
     ///
@@ -114,11 +118,12 @@ where
     _marker: PhantomData<(P, F)>,
 }
 
-impl<P, F, M> FlaggedPtr<P, F, M>
+impl<P, F, M, S> FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M>,
     F: FlagMeta,
     M: Copy,
+    S: PointerStorage,
 {
     /// Assert that the pointer and flag bits do not overlap.
     /// This assertion may still pass because `P`'s alignment cannot be guaranteed at compile time.
@@ -137,6 +142,7 @@ where
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
     /// use enumflags2::bitflags;
     /// use std::ptr::NonNull;
     ///
@@ -149,7 +155,7 @@ where
     /// }
     ///
     /// let boxed = Box::new(42);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
     /// assert_eq!(*flagged, 42);
     /// ```
     ///
@@ -183,6 +189,7 @@ where
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
     /// use enumflags2::{bitflags,BitFlags};
     /// use std::ptr::NonNull;
     ///
@@ -203,10 +210,10 @@ where
     /// }
     ///
     /// let boxed = Box::new(42);
-    /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlags>,_>,_> = FlaggedPtr::try_new(boxed.clone(), MyFlags::A.into());
+    /// let flagged = FlaggedBox::try_new(boxed.clone(), BitFlags::from(MyFlags::A));
     /// assert!(flagged.is_ok());
     ///
-    /// let flagged:Result<FlaggedPtr<_,BitFlags<MyFlagsInvalid>,_>,_> = FlaggedPtr::try_new(boxed, MyFlagsInvalid::B.into());
+    /// let flagged = FlaggedBox::try_new(boxed, BitFlags::from(MyFlagsInvalid::B));
     /// assert!(flagged.is_err());
     /// ```
     pub fn try_new(ptr: P, flag: F) -> Result<Self, FlaggedPointerError<P>> {
@@ -236,7 +243,7 @@ where
         let repr =
             unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize())) };
         Ok(Self {
-            repr,
+            repr: S::new(repr),
             meta,
             _marker: PhantomData,
         })
@@ -250,25 +257,43 @@ where
         let repr =
             unsafe { NonNull::new_unchecked(ptr.as_ptr().map_addr(|addr| addr | flag.to_usize())) };
         Self {
-            repr,
+            repr: S::new(repr),
             meta,
             _marker: PhantomData,
         }
     }
 }
 
-impl<P, F, M> FlaggedPtr<P, F, M>
+/// A non-atomic version of `FlaggedPtr` methods.
+impl<P, F, M, S> FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M>,
     F: FlagMeta,
     M: Copy,
+    S: PointerStorage,
 {
+
+    // Take the data pointer.
+    //
+    // # Safety
+    //
+    // The caller must ensure there is no any data race when accessing the pointer.
+    fn ptr_repr(&self) -> NonNull<()> {
+        let ptr_val = self
+            .repr
+            .load()
+            .as_ptr()
+            .map_addr(|addr| addr & P::mask(self.meta));
+        unsafe { NonNull::new_unchecked(ptr_val) }
+    }
+
     /// Returns the flags stored in this pointer.
     ///
     /// # Examples
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
     /// use enumflags2::bitflags;
     ///
     /// #[bitflags]
@@ -280,16 +305,155 @@ where
     /// }
     ///
     /// let boxed = Box::new(123);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
     /// assert_eq!(flagged.flag(), MyFlags::A | MyFlags::B);
     /// ```
     pub fn flag(&self) -> F {
-        let flag_repr = F::mask() & self.repr.as_ptr() as usize;
+        let flag_repr = F::mask() & self.repr.load().as_ptr() as usize;
         // SAFETY: We know the flag bits are valid because they were set by `new`
         // or `set_flag`, both of which ensure the bits are within the valid range
         unsafe { F::from_usize(flag_repr) }
     }
 
+    /// Consumes this `FlaggedPtr` and returns the original pointer and flags.
+    ///
+    /// This is the inverse operation of `new()`.
+    ///
+    /// # Returns
+    /// A tuple containing `(original_pointer, flags)`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(42);
+    /// let flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
+    /// let (recovered_box, flags) = flagged.dissolve();
+    ///
+    /// assert_eq!(*recovered_box, 42);
+    /// assert_eq!(flags, MyFlags::A | MyFlags::B);
+    /// ```
+    pub fn dissolve(self) -> (P, F) {
+        let ptr_repr = self.repr.load().as_ptr();
+        let flag_repr = F::mask() & ptr_repr as usize;
+
+        // SAFETY: We know these values are valid because:
+        // 1. The pointer was originally created from a valid P
+        // 2. We've masked out the flag bits, leaving only valid pointer bits
+        // 3. The metadata is preserved from construction
+        let ptr = unsafe { P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta) };
+        let flag = unsafe { F::from_usize(flag_repr) };
+
+        // Prevent the destructor from running since we're taking ownership
+        mem::forget(self);
+        (ptr, flag)
+    }
+
+    /// Returns a raw pointer to the pointee.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure there is no any data race when accessing the pointer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
+    /// let ptr = flagged.as_ptr();
+    /// assert_eq!(unsafe { *ptr.as_ref() }, 123);
+    /// ```
+    pub fn as_ptr(&self) -> NonNull<P::Pointee> {
+        let ptr_repr = self.ptr_repr();
+        unsafe { P::map_pointee(ptr_repr, self.meta) }
+    }
+
+    /// Consumes this `FlaggedPtr` and returns the original flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
+    /// let flag = flagged.into_flag();
+    /// assert_eq!(flag, MyFlags::A | MyFlags::B);
+    /// ```
+    pub fn into_flag(self) -> F {
+        self.flag()
+    }
+
+    /// Consumes this `FlaggedPtr` and returns the original pointer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
+    /// let ptr = flagged.into_ptr();
+    /// assert_eq!(unsafe { *ptr.as_ref() }, 123);
+    /// ```
+    pub fn into_ptr(self) -> P {
+        let ptr_repr = self.ptr_repr();
+        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) };
+        // Prevent the destructor from running since we're taking ownership
+        mem::forget(self);
+        ptr
+    }
+}
+
+impl<P, F, M> FlaggedPtr<P, F, M, NonNull<()>>
+where
+    P: PtrMeta<M>,
+    F: FlagMeta,
+    M: Copy,
+{
     /// Sets new flags for this pointer.
     ///
     /// # Arguments
@@ -299,6 +463,7 @@ where
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
     /// use enumflags2::bitflags;
     ///
     /// #[bitflags]
@@ -310,7 +475,7 @@ where
     /// }
     ///
     /// let boxed = Box::new(123);
-    /// let mut flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let mut flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
     /// flagged.set_flag(MyFlags::B.into());
     /// assert_eq!(flagged.flag(), MyFlags::B);
     /// ```
@@ -318,7 +483,7 @@ where
         let old_flag = self.flag();
         let flag_repr = flag.to_usize();
         let ptr_repr = self.ptr_repr();
-        self.repr = ptr_repr.map_addr(|addr| addr | flag_repr);
+        self.repr.set(ptr_repr.map_addr(|addr| addr | flag_repr));
         old_flag
     }
 
@@ -331,6 +496,7 @@ where
     ///
     /// ```
     /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
     /// use enumflags2::bitflags;
     ///
     /// #[bitflags]
@@ -342,7 +508,7 @@ where
     /// }
     ///
     /// let boxed = Box::new(123);
-    /// let mut flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
+    /// let mut flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
     /// flagged.try_set_pointer(Box::new(456)).unwrap();
     /// assert_eq!(*flagged.into_ptr(), 456);
     /// ```
@@ -370,154 +536,138 @@ where
         }
 
         let old_ptr_repr = self.ptr_repr();
-        let old_pointer=unsafe {
-            P::from_pointee_ptr_and_meta(old_ptr_repr, self.meta)
-        };
+        let old_pointer = unsafe { P::from_pointee_ptr_and_meta(old_ptr_repr, self.meta) };
 
-        self.repr = ptr_repr.map_addr(|addr| addr | current_flag.to_usize());
+        self.repr
+            .set(ptr_repr.map_addr(|addr| addr | current_flag.to_usize()));
         self.meta = meta;
         Ok(old_pointer)
     }
-
-    /// Consumes this `FlaggedPtr` and returns the original pointer and flags.
-    ///
-    /// This is the inverse operation of `new()`.
-    ///
-    /// # Returns
-    /// A tuple containing `(original_pointer, flags)`
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(42);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let (recovered_box, flags) = flagged.dissolve();
-    ///
-    /// assert_eq!(*recovered_box, 42);
-    /// assert_eq!(flags, MyFlags::A | MyFlags::B);
-    /// ```
-    pub fn dissolve(self) -> (P, F) {
-        let ptr_repr = self.repr.as_ptr();
-        let flag_repr = F::mask() & ptr_repr as usize;
-
-        // SAFETY: We know these values are valid because:
-        // 1. The pointer was originally created from a valid P
-        // 2. We've masked out the flag bits, leaving only valid pointer bits
-        // 3. The metadata is preserved from construction
-        let ptr = unsafe { P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta) };
-        let flag = unsafe { F::from_usize(flag_repr) };
-
-        // Prevent the destructor from running since we're taking ownership
-        mem::forget(self);
-        (ptr, flag)
-    }
-
-    fn ptr_repr(&self) -> NonNull<()> {
-        let ptr_val = self
-            .repr
-            .as_ptr()
-            .map_addr(|addr| addr & P::mask(self.meta));
-        unsafe { NonNull::new_unchecked(ptr_val) }
-    }
-
-    /// Returns a raw pointer to the pointee.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the pointer is valid for the lifetime of `self`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(123);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let ptr = flagged.as_ptr();
-    /// assert_eq!(unsafe { *ptr.as_ref() }, 123);
-    /// ```
-    pub fn as_ptr(&self) -> NonNull<P::Pointee> {
-        let ptr_repr = self.ptr_repr();
-        unsafe { P::map_pointee(ptr_repr, self.meta) }
-    }
-
-    /// Consumes this `FlaggedPtr` and returns the original flags.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(123);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let flag = flagged.into_flag();
-    /// assert_eq!(flag, MyFlags::A | MyFlags::B);
-    /// ```
-    pub fn into_flag(self) -> F {
-        self.flag()
-    }
-
-    /// Consumes this `FlaggedPtr` and returns the original pointer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flagged_pointer::FlaggedPtr;
-    /// use enumflags2::bitflags;
-    ///
-    /// #[bitflags]
-    /// #[repr(u8)]
-    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    /// enum MyFlags {
-    ///     A = 1 << 0,
-    ///     B = 1 << 1,
-    /// }
-    ///
-    /// let boxed = Box::new(123);
-    /// let flagged = FlaggedPtr::new(boxed, MyFlags::A | MyFlags::B);
-    /// let ptr = flagged.into_ptr();
-    /// assert_eq!(unsafe { *ptr.as_ref() }, 123);
-    /// ```
-    pub fn into_ptr(self) -> P {
-        let ptr_repr = self.ptr_repr();
-        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) };
-        // Prevent the destructor from running since we're taking ownership
-        mem::forget(self);
-        ptr
-    }
-
 }
 
-impl<P, F, M> Deref for FlaggedPtr<P, F, M>
+impl<P, F, S> FlaggedPtr<P, F, (), S>
+where
+    P: PtrMeta<()>,
+    F: FlagMeta,
+    S: AtomicPointerStorage,
+{
+    /// Sets new flags for this pointer.
+    ///
+    /// # Arguments
+    /// - `flag`: The new flags to set
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let mut flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
+    /// flagged.set_flag(MyFlags::B.into());
+    /// assert_eq!(flagged.flag(), MyFlags::B);
+    /// ```
+    pub fn set_flag(&self, flag: F) -> F {
+        let new_flag_bits = flag.to_usize();
+        let mask = F::mask();
+
+        let mut current = self.repr.load();
+
+        loop {
+            let current_addr = current.as_ptr() as usize;
+            let current_flag = unsafe { F::from_usize( current_addr & mask) };
+            let new_ptr = current.map_addr(|addr| unsafe {NonZero::new_unchecked(addr.get() & !mask | new_flag_bits)});
+
+            // cas
+            match self.repr.compare_exchange(current, new_ptr) {
+                Ok(_) => return current_flag,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Sets a new pointer for this `FlaggedPtr`, while preserving the current flags.
+    ///
+    /// # Arguments
+    /// - `ptr`: The new pointer to set
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flagged_pointer::FlaggedPtr;
+    /// use flagged_pointer::alias::FlaggedBox;
+    /// use enumflags2::bitflags;
+    ///
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    /// enum MyFlags {
+    ///     A = 1 << 0,
+    ///     B = 1 << 1,
+    /// }
+    ///
+    /// let boxed = Box::new(123);
+    /// let mut flagged = FlaggedBox::new(boxed, MyFlags::A | MyFlags::B);
+    /// flagged.try_set_pointer(Box::new(456)).unwrap();
+    /// assert_eq!(*flagged.into_ptr(), 456);
+    /// ```
+    pub fn try_set_pointer(&self, ptr: P) -> Result<P, FlaggedPointerError<P>> {
+        let (ptr_repr, _meta) = ptr.to_pointee_ptr_and_meta();
+
+        if (P::mask(_meta) & F::mask()) != 0 {
+            let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, _meta) };
+            return Err(FlaggedPointerError::FlagOverlap {
+                ptr_mask: P::mask(_meta),
+                flag_mask: F::mask(),
+                origin_pointer,
+            });
+        }
+
+        let ptr_addr = ptr_repr.as_ptr() as usize;
+        if ptr_addr & F::mask() != 0 {
+            let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, _meta) };
+            return Err(FlaggedPointerError::Misalignment {
+                ptr_addr,
+                flag_mask: F::mask(),
+                origin_pointer,
+            });
+        }
+
+        let mut current = self.repr.load();
+        let mask = F::mask();
+
+        loop {
+            let current_addr = current.as_ptr() as usize;
+            let current_flag_bits = current_addr & mask;
+
+            // prepare new pointer
+            let new_addr = ptr_repr.map_addr(|a| a | current_flag_bits);
+
+            // cas
+            match self.repr.compare_exchange(current, new_addr) {
+                Ok(success_val) => {
+                    let old_ptr_base = success_val.map_addr(|addr| unsafe {NonZero::new_unchecked(addr.get() & !mask)});
+                    let old_pointer = unsafe { P::from_pointee_ptr_and_meta(old_ptr_base, ()) };
+                    return Ok(old_pointer);
+                }
+                Err(actual) => {
+                    current = actual;
+                }
+            }
+        }
+    }
+}
+
+impl<P, F, M> Deref for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     F: FlagMeta,
@@ -534,7 +684,7 @@ where
     }
 }
 
-impl<P, F, M> DerefMut for FlaggedPtr<P, F, M>
+impl<P, F, M> DerefMut for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + DerefMut<Target = P::Pointee>,
     F: FlagMeta,
@@ -546,11 +696,12 @@ where
     }
 }
 
-impl<P, F, M> Drop for FlaggedPtr<P, F, M>
+impl<P, F, M, S> Drop for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M>,
     F: FlagMeta,
     M: Copy,
+    S: PointerStorage,
 {
     fn drop(&mut self) {
         // SAFETY:
@@ -558,13 +709,14 @@ where
         // 2. The pointer bits are extracted using the same mask as during construction
         // 3. The metadata is preserved from construction
         // 4. The value is dropped immediately, preventing use-after-free
+        // 5. `&mut Self` guarantee that the pointer is safe from data race
         unsafe {
             let _ = P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta);
         }
     }
 }
 
-impl<P, F, M> AsRef<P::Pointee> for FlaggedPtr<P, F, M>
+impl<P, F, M> AsRef<P::Pointee> for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     F: FlagMeta,
@@ -575,7 +727,7 @@ where
     }
 }
 
-impl<P, F, M> AsMut<P::Pointee> for FlaggedPtr<P, F, M>
+impl<P, F, M> AsMut<P::Pointee> for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + DerefMut<Target = P::Pointee>,
     F: FlagMeta,
@@ -586,7 +738,7 @@ where
     }
 }
 
-impl<P, F, M> Clone for FlaggedPtr<P, F, M>
+impl<P, F, M> Clone for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Clone,
     F: FlagMeta,
@@ -601,11 +753,12 @@ where
     }
 }
 
-impl<P, F, M> std::fmt::Pointer for FlaggedPtr<P, F, M>
+impl<P, F, M, S> std::fmt::Pointer for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M>,
     F: FlagMeta,
     M: Copy,
+    S: PointerStorage,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ptr = self.as_ptr();
@@ -613,7 +766,7 @@ where
     }
 }
 
-impl<P, F, M> std::fmt::Debug for FlaggedPtr<P, F, M>
+impl<P, F, M> std::fmt::Debug for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: std::fmt::Debug,
@@ -625,7 +778,19 @@ where
     }
 }
 
-impl<P, F, M> PartialEq for FlaggedPtr<P, F, M>
+impl<P, F, M> std::fmt::Debug for FlaggedPtr<P, F, M, AtomicPtr<()>>
+where
+    P: PtrMeta<M> + Deref<Target = P::Pointee>,
+    P::Pointee: std::fmt::Debug,
+    F: FlagMeta + std::fmt::Debug,
+    M: Copy,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Pointer::fmt(self, f)
+    }
+}
+
+impl<P, F, M> PartialEq for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: PartialEq,
@@ -639,7 +804,7 @@ where
     }
 }
 
-impl<P, F, M> Eq for FlaggedPtr<P, F, M>
+impl<P, F, M> Eq for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: Eq,
@@ -648,7 +813,7 @@ where
 {
 }
 
-impl<P, F, M> Hash for FlaggedPtr<P, F, M>
+impl<P, F, M> Hash for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee>,
     P::Pointee: Hash,
@@ -661,23 +826,25 @@ where
     }
 }
 
-unsafe impl<P, F, M> Send for FlaggedPtr<P, F, M>
+unsafe impl<P, F, M,S> Send for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M> + Send,
     F: FlagMeta + Send,
     M: Send + Copy,
+    S: PointerStorage,
 {
 }
 
-unsafe impl<P, F, M> Sync for FlaggedPtr<P, F, M>
+unsafe impl<P, F, M,S> Sync for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M> + Sync,
     F: FlagMeta + Sync,
     M: Sync + Copy,
+    S: PointerStorage,
 {
 }
 
-unsafe impl<P, F, M> stable_deref_trait::StableDeref for FlaggedPtr<P, F, M>
+unsafe impl<P, F, M> stable_deref_trait::StableDeref for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee> + stable_deref_trait::StableDeref,
     F: FlagMeta,
@@ -685,7 +852,7 @@ where
 {
 }
 
-unsafe impl<P, F, M> stable_deref_trait::CloneStableDeref for FlaggedPtr<P, F, M>
+unsafe impl<P, F, M> stable_deref_trait::CloneStableDeref for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Deref<Target = P::Pointee> + stable_deref_trait::CloneStableDeref,
     F: FlagMeta,
@@ -728,50 +895,69 @@ where
 /// let flagged: FlaggedBox<_, BitFlags<Status>> = FlaggedBox::new(boxed, Status::Active.into());
 /// ```
 pub mod alias {
-    use std::{ptr::NonNull, rc::Rc, sync::Arc};
+    use std::{
+        ptr::NonNull,
+        rc::Rc,
+        sync::{Arc, atomic::AtomicPtr},
+    };
 
     use crate::{FlaggedPtr, ptr::ptr_impl::WithMaskMeta};
 
     /// A flagged `NonNull<T>` pointer.
-    pub type FlaggedNonNull<T, F> = FlaggedPtr<NonNull<T>, F, ()>;
+    pub type FlaggedNonNull<T, F> = FlaggedPtr<NonNull<T>, F, (), NonNull<()>>;
 
     /// A flagged `NonNull<[T]>` slice pointer.
-    pub type FlaggedNonNullSlice<T, F> = FlaggedPtr<NonNull<[T]>, F, usize>;
+    pub type FlaggedNonNullSlice<T, F> = FlaggedPtr<NonNull<[T]>, F, usize, NonNull<()>>;
 
     /// A flagged `NonNull<dyn Trait>` trait object pointer.
-    pub type FlaggedNonNullDyn<T, F> = FlaggedPtr<NonNull<T>, F, WithMaskMeta<T>>;
+    pub type FlaggedNonNullDyn<T, F> = FlaggedPtr<NonNull<T>, F, WithMaskMeta<T>, NonNull<()>>;
 
     /// A flagged `Box<T>` pointer.
-    pub type FlaggedBox<T, F> = FlaggedPtr<Box<T>, F, ()>;
+    pub type FlaggedBox<T, F> = FlaggedPtr<Box<T>, F, (), NonNull<()>>;
 
     /// A flagged `Box<[T]>` slice pointer.
-    pub type FlaggedBoxSlice<T, F> = FlaggedPtr<Box<[T]>, F, usize>;
+    pub type FlaggedBoxSlice<T, F> = FlaggedPtr<Box<[T]>, F, usize, NonNull<()>>;
 
     /// A flagged `Box<dyn Trait>` trait object pointer.
-    pub type FlaggedBoxDyn<T, F> = FlaggedPtr<Box<T>, F, WithMaskMeta<T>>;
+    pub type FlaggedBoxDyn<T, F> = FlaggedPtr<Box<T>, F, WithMaskMeta<T>, NonNull<()>>;
 
     /// A flagged `Rc<T>` pointer.
-    pub type FlaggedRc<T, F> = FlaggedPtr<Rc<T>, F, ()>;
+    pub type FlaggedRc<T, F> = FlaggedPtr<Rc<T>, F, (), NonNull<()>>;
 
     /// A flagged `Rc<[T]>` slice pointer.
-    pub type FlaggedRcSlice<T, F> = FlaggedPtr<Rc<[T]>, F, usize>;
+    pub type FlaggedRcSlice<T, F> = FlaggedPtr<Rc<[T]>, F, usize, NonNull<()>>;
 
     /// A flagged `Rc<dyn Trait>` trait object pointer.
-    pub type FlaggedRcDyn<T, F> = FlaggedPtr<Rc<T>, F, WithMaskMeta<T>>;
+    pub type FlaggedRcDyn<T, F> = FlaggedPtr<Rc<T>, F, WithMaskMeta<T>, NonNull<()>>;
 
     /// A flagged `Arc<T>` pointer.
-    pub type FlaggedArc<T, F> = FlaggedPtr<Arc<T>, F, ()>;
+    pub type FlaggedArc<T, F> = FlaggedPtr<Arc<T>, F, (), NonNull<()>>;
 
     /// A flagged `Arc<[T]>` slice pointer.
-    pub type FlaggedArcSlice<T, F> = FlaggedPtr<Arc<[T]>, F, usize>;
+    pub type FlaggedArcSlice<T, F> = FlaggedPtr<Arc<[T]>, F, usize, NonNull<()>>;
 
     /// A flagged `Arc<dyn Trait>` trait object pointer.
-    pub type FlaggedArcDyn<T, F> = FlaggedPtr<Arc<T>, F, WithMaskMeta<T>>;
+    pub type FlaggedArcDyn<T, F> = FlaggedPtr<Arc<T>, F, WithMaskMeta<T>, NonNull<()>>;
+
+    /// Atomic version for `NonNull<T>` pointer.
+    pub type FlaggedAtomicNonNull<T, F> = FlaggedPtr<NonNull<T>, F, (), AtomicPtr<()>>;
+
+    /// Atomic version for `Box<T>` pointer.
+    pub type FlaggedAtomicBox<T, F> = FlaggedPtr<Box<T>, F, (), AtomicPtr<()>>;
+
+    /// Atomic version for `Rc<T>` pointer.
+    pub type FlaggedAtomicRc<T, F> = FlaggedPtr<Rc<T>, F, (), AtomicPtr<()>>;
+
+    /// Atomic version for `Arc<T>` pointer.
+    pub type FlaggedAtomicArc<T, F> = FlaggedPtr<Arc<T>, F, (), AtomicPtr<()>>;
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::alias::{FlaggedBox, FlaggedBoxSlice, FlaggedNonNull, FlaggedNonNullSlice};
+    use crate::alias::{
+        FlaggedArc, FlaggedArcDyn, FlaggedAtomicBox, FlaggedBox, FlaggedBoxDyn, FlaggedBoxSlice,
+        FlaggedNonNull, FlaggedNonNullSlice, FlaggedRc,
+    };
 
     use super::*;
     use enumflags2::{BitFlags, bitflags};
@@ -845,10 +1031,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "Misalignment")]
     fn test_nonnull_misaligned() {
-        let val = 10u64;
-        let ptr_addr = &val as *const _ as usize;
-        let bad_addr = ptr_addr | 1;
-        let bad_ptr = unsafe { NonNull::new_unchecked(bad_addr as *mut u64) };
+        let mut val = 10u64;
+        let ptr_addr = &mut val as *mut u64;
+        let bad_addr = ptr_addr.map_addr(|addr| addr | 1);
+        let bad_ptr = unsafe { NonNull::new_unchecked(bad_addr) };
         let _: FlaggedNonNull<u64, BitFlags<TestFlag>> =
             FlaggedNonNull::new(bad_ptr, TestFlag::B.into());
     }
@@ -859,7 +1045,7 @@ mod tests {
         let ptr = Box::new(&mut data);
         let flags = TestFlag::A | TestFlag::C;
 
-        let mut flagged_ptr = FlaggedPtr::new(ptr, flags);
+        let mut flagged_ptr = FlaggedBox::new(ptr, flags);
 
         assert_eq!(**flagged_ptr, 42);
         **flagged_ptr = 99;
@@ -881,7 +1067,7 @@ mod tests {
         let data = Arc::new(1337_u64);
         let flags = TestFlag::A | TestFlag::B;
 
-        let flagged_ptr1 = FlaggedPtr::new(data, flags);
+        let flagged_ptr1 = FlaggedArc::new(data, flags);
         let (cloned, _) = flagged_ptr1.clone().dissolve();
         assert_eq!(Arc::strong_count(&cloned), 2);
 
@@ -900,7 +1086,7 @@ mod tests {
         let data: Box<[u64]> = Box::new([1, 2, 3, 4, 5]);
         let flags = TestFlag::B;
 
-        let mut flagged_ptr: FlaggedPtr<Box<[u64]>, _, usize> =
+        let mut flagged_ptr: FlaggedPtr<Box<[u64]>, _, usize, _> =
             FlaggedBoxSlice::new(data, flags.into());
 
         assert_eq!(&*flagged_ptr, &[1, 2, 3, 4, 5]);
@@ -944,7 +1130,8 @@ mod tests {
             Box<dyn TestDyn>,
             BitFlags<TestFlag, u8>,
             ptr::ptr_impl::WithMaskMeta<dyn TestDyn>,
-        > = FlaggedPtr::new(instance, flags.into());
+            _,
+        > = FlaggedBoxDyn::new(instance, flags.into());
 
         assert_eq!(flagged_ptr.value(), 100);
         flagged_ptr.set_value(200);
@@ -964,8 +1151,8 @@ mod tests {
         let data = Arc::new(vec![10, 20, 30]);
         let flags = TestFlag::A;
 
-        let flagged_ptr: FlaggedPtr<Arc<Vec<i32>>, BitFlags<TestFlag, u8>, ()> =
-            FlaggedPtr::new(data, flags.into());
+        let flagged_ptr: FlaggedPtr<Arc<Vec<i32>>, BitFlags<TestFlag, u8>, (), _> =
+            FlaggedArc::new(data, flags.into());
 
         let handle = std::thread::spawn(move || {
             assert_eq!(flagged_ptr.flag(), TestFlag::A);
@@ -984,7 +1171,7 @@ mod tests {
         let instance: Arc<dyn TestDyn> = Arc::new(DynImpl { val: 777 });
         let flags = TestFlag::B | TestFlag::C;
 
-        let flagged_ptr = FlaggedPtr::new(instance, flags);
+        let flagged_ptr = FlaggedArcDyn::new(instance, flags);
         assert_eq!(Arc::strong_count(&flagged_ptr.clone().dissolve().0), 2);
 
         let cloned_flagged_ptr = flagged_ptr.clone();
@@ -1008,8 +1195,8 @@ mod tests {
         let data = Arc::new(vec![10, 20, 30]);
         let flags = TestFlag::A;
 
-        let flagged_ptr: FlaggedPtr<Arc<Vec<i32>>, BitFlags<TestFlag, u8>, ()> =
-            FlaggedPtr::new(data, flags.into());
+        let flagged_ptr: FlaggedPtr<Arc<Vec<i32>>, BitFlags<TestFlag, u8>, (), _> =
+            FlaggedArc::new(data, flags.into());
 
         let handle = std::thread::spawn(move || {
             assert_eq!(flagged_ptr.flag(), TestFlag::A);
@@ -1028,16 +1215,16 @@ mod tests {
         let data1 = Box::new(100u64);
         let data2 = Box::new(100u64);
         let flags = TestFlag::A | TestFlag::C;
-        
+
         let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data1, flags.into());
         let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data2, flags.into());
-        
+
         let mut hasher1 = DefaultHasher::new();
         let mut hasher2 = DefaultHasher::new();
-        
+
         flagged1.hash(&mut hasher1);
         flagged2.hash(&mut hasher2);
-        
+
         assert_eq!(hasher1.finish(), hasher2.finish());
     }
 
@@ -1045,10 +1232,12 @@ mod tests {
     fn test_partial_eq_different_flags() {
         let data1 = Box::new(50u64);
         let data2 = Box::new(50u64);
-        
-        let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data1, TestFlag::A.into());
-        let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data2, TestFlag::B.into());
-        
+
+        let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> =
+            FlaggedBox::new(data1, TestFlag::A.into());
+        let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> =
+            FlaggedBox::new(data2, TestFlag::B.into());
+
         assert_ne!(flagged1, flagged2);
     }
 
@@ -1059,10 +1248,11 @@ mod tests {
         let ptr1 = Box::new(&mut data1);
         let ptr2 = Box::new(&mut data2);
         let flags = TestFlag::A | TestFlag::B;
-        
-        let mut flagged: FlaggedBox<&mut u64, BitFlags<TestFlag>> = FlaggedBox::new(ptr1, flags.into());
+
+        let mut flagged: FlaggedBox<&mut u64, BitFlags<TestFlag>> =
+            FlaggedBox::new(ptr1, flags.into());
         assert_eq!(**flagged, 10);
-        
+
         let old_ptr = flagged.try_set_pointer(ptr2).unwrap();
         assert_eq!(**flagged, 20);
         assert_eq!(flagged.flag(), flags);
@@ -1074,7 +1264,7 @@ mod tests {
         let data = Box::new(30u64);
         let flags = TestFlag::A;
         let mut flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
-        
+
         let result = flagged.try_set_pointer(Box::new(40u64));
         assert!(result.is_ok());
     }
@@ -1084,10 +1274,10 @@ mod tests {
         let data = Box::new(77u64);
         let flags = TestFlag::B | TestFlag::C;
         let mut flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
-        
+
         let ref_data = flagged.as_ref();
         assert_eq!(*ref_data, 77);
-        
+
         let mut_ref = flagged.as_mut();
         *mut_ref = 88;
         assert_eq!(*flagged, 88);
@@ -1097,15 +1287,16 @@ mod tests {
     fn test_rc_operations() {
         let data = Rc::new(99u64);
         let flags = TestFlag::A | TestFlag::C;
-        let flagged: FlaggedPtr<Rc<u64>, BitFlags<TestFlag>, ()> = FlaggedPtr::new(data, flags.into());
-        
+        let flagged: FlaggedPtr<Rc<u64>, BitFlags<TestFlag>, (), _> =
+            FlaggedRc::new(data, flags.into());
+
         assert_eq!(*flagged, 99);
         assert_eq!(flagged.flag(), flags);
-        
+
         let cloned = flagged.clone();
         assert_eq!(*cloned, 99);
         assert_eq!(cloned.flag(), flags);
-        
+
         let (ptr_out, flags_out) = flagged.dissolve();
         assert_eq!(flags_out, flags);
         assert_eq!(*ptr_out, 99);
@@ -1117,7 +1308,7 @@ mod tests {
         let data = Box::new(123u64);
         let flags = BitFlags::<TestFlag>::empty();
         let flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags);
-        
+
         assert_eq!(flagged.flag(), flags);
         assert_eq!(*flagged, 123);
     }
@@ -1127,8 +1318,84 @@ mod tests {
         let data = Box::new(456u64);
         let flags = TestFlag::A | TestFlag::B | TestFlag::C;
         let flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
-        
+
         assert_eq!(flagged.flag(), flags);
         assert_eq!(*flagged, 456);
     }
+
+    #[test]
+    fn test_atomic_concurrent_flag_updates() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 10;
+        const ITERATIONS: usize = 1000;
+
+        let data = Box::new(0usize);
+        let flagged_ptr = Arc::new(FlaggedAtomicBox::new(data, BitFlags::<TestFlag>::empty()));
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let mut handles = vec![];
+
+        for i in 0..THREADS {
+            let ptr = flagged_ptr.clone();
+            let barrier = barrier.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..ITERATIONS {
+                    let flag = if i % 2 == 0 {
+                        TestFlag::A
+                    } else {
+                        TestFlag::B
+                    };
+                    ptr.set_flag(flag.into());
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let final_flag = flagged_ptr.flag();
+        assert!(final_flag == TestFlag::A || final_flag == TestFlag::B);
+        
+        let (ptr, _) = Arc::try_unwrap(flagged_ptr).unwrap().dissolve();
+        assert_eq!(*ptr, 0);
+    }
+
+    #[test]
+    fn test_atomic_concurrent_pointer_swaps() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 4;
+        const ITERATIONS: usize = 100;
+
+        let flagged_ptr = Arc::new(FlaggedAtomicBox::new(Box::new(0usize), TestFlag::A.into()));
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let mut handles = vec![];
+
+        for i in 0..THREADS {
+            let ptr = flagged_ptr.clone();
+            let barrier = barrier.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..ITERATIONS {
+                    let new_box = Box::new(i);
+                    let _old_box = ptr.try_set_pointer(new_box).unwrap();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let (final_ptr, final_flag): (Box<usize>, BitFlags<TestFlag>) = Arc::try_unwrap(flagged_ptr).unwrap().dissolve();
+        assert!(*final_ptr < THREADS);
+        assert_eq!(final_flag, TestFlag::A);
+    }
+
 }
