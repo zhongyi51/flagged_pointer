@@ -140,5 +140,6 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - better error handling with `thiserror` crate
 
 ### 0.2.0
+- support for `AtomicPtr` for thin pointers
 - improved methods
 - more tests
