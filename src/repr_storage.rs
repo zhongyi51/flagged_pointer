@@ -49,7 +49,8 @@ impl PointerStorage for AtomicPtr<()> {
         unsafe { NonNull::new_unchecked(self.load(Ordering::Acquire)) }
     }
     fn set(&mut self, ptr: NonNull<()>) -> NonNull<()> {
-        let old = self.swap(ptr.as_ptr(), Ordering::Release);
+        let old = *self.get_mut();
+        *self.get_mut() = ptr.as_ptr();
         unsafe { NonNull::new_unchecked(old) }
     }
 }

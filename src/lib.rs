@@ -7,7 +7,7 @@
 //! for implementing space-efficient data structures like tagged unions or specialized
 //! memory allocators.
 use std::{
-    hash::Hash, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::NonNull, sync::atomic::AtomicPtr
+    hash::{Hash, Hasher}, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::{NonNull,eq}, sync::atomic::AtomicPtr
 };
 
 use crate::{
@@ -446,6 +446,25 @@ where
         mem::forget(self);
         ptr
     }
+
+    /// Comparing internal pointer representations ignoring flags, like `ptr::eq`.
+    /// 
+    /// # Returns
+    /// `true` if the internal pointer representations are equal, `false` otherwise.
+    pub fn ptr_eq(left:&FlaggedPtr<P,F,M,S>, right:&FlaggedPtr<P,F,M,S>) -> bool {
+        let left_ptr=left.as_ptr().as_ptr();
+        let right_ptr=right.as_ptr().as_ptr();
+        eq(left_ptr, right_ptr)
+    }
+
+    /// Hashes the internal pointer representation ignoring flags, like `ptr::hash`.
+    /// 
+    /// # Arguments
+    /// - `hasher`: The hasher to use for hashing
+    pub fn ptr_hash(&self, hasher:&mut impl Hasher) {
+        let ptr_repr = self.as_ptr();
+        ptr_repr.as_ptr().hash(hasher);
+    }
 }
 
 impl<P, F, M> FlaggedPtr<P, F, M, NonNull<()>>
@@ -858,6 +877,30 @@ where
     F: FlagMeta,
     M: Copy,
 {
+}
+
+impl<P, F, M, S> From<(P, F)> for FlaggedPtr<P, F, M, S>
+where
+    P: PtrMeta<M>,
+    F: FlagMeta,
+    M: Copy,
+    S: PointerStorage,
+{
+    fn from((ptr, flag): (P, F)) -> Self {
+        Self::new(ptr, flag)
+    }
+}
+
+impl<P, F, M, S> Default for FlaggedPtr<P, F, M, S>
+where
+    P: PtrMeta<M> + Default,
+    F: FlagMeta + Default,
+    M: Copy,
+    S: PointerStorage,
+{
+    fn default() -> Self {
+        Self::new(P::default(), F::default())
+    }
 }
 
 /// Type aliases for common pointer combinations.

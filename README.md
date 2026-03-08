@@ -143,3 +143,7 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - support for `AtomicPtr` for thin pointers
 - improved methods
 - more tests
+
+### 0.2.1
+- more methods
+- optimize `PointerStorage::set` for atomic pointers
