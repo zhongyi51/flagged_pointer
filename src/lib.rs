@@ -7,7 +7,13 @@
 //! for implementing space-efficient data structures like tagged unions or specialized
 //! memory allocators.
 use std::{
-    hash::{Hash, Hasher}, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::{NonNull,eq}, sync::atomic::AtomicPtr
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    mem,
+    num::NonZero,
+    ops::{Deref, DerefMut},
+    ptr::{NonNull, eq},
+    sync::atomic::AtomicPtr,
 };
 
 use crate::{
@@ -272,7 +278,6 @@ where
     M: Copy,
     S: PointerStorage,
 {
-
     // Take the data pointer.
     //
     // # Safety
@@ -448,20 +453,20 @@ where
     }
 
     /// Comparing internal pointer representations ignoring flags, like `ptr::eq`.
-    /// 
+    ///
     /// # Returns
     /// `true` if the internal pointer representations are equal, `false` otherwise.
-    pub fn ptr_eq(left:&FlaggedPtr<P,F,M,S>, right:&FlaggedPtr<P,F,M,S>) -> bool {
-        let left_ptr=left.as_ptr().as_ptr();
-        let right_ptr=right.as_ptr().as_ptr();
+    pub fn ptr_eq(left: &FlaggedPtr<P, F, M, S>, right: &FlaggedPtr<P, F, M, S>) -> bool {
+        let left_ptr = left.as_ptr().as_ptr();
+        let right_ptr = right.as_ptr().as_ptr();
         eq(left_ptr, right_ptr)
     }
 
     /// Hashes the internal pointer representation ignoring flags, like `ptr::hash`.
-    /// 
+    ///
     /// # Arguments
     /// - `hasher`: The hasher to use for hashing
-    pub fn ptr_hash(&self, hasher:&mut impl Hasher) {
+    pub fn ptr_hash(&self, hasher: &mut impl Hasher) {
         let ptr_repr = self.as_ptr();
         ptr_repr.as_ptr().hash(hasher);
     }
@@ -603,8 +608,10 @@ where
 
         loop {
             let current_addr = current.as_ptr() as usize;
-            let current_flag = unsafe { F::from_usize( current_addr & mask) };
-            let new_ptr = current.map_addr(|addr| unsafe {NonZero::new_unchecked(addr.get() & !mask | new_flag_bits)});
+            let current_flag = unsafe { F::from_usize(current_addr & mask) };
+            let new_ptr = current.map_addr(|addr| unsafe {
+                NonZero::new_unchecked(addr.get() & !mask | new_flag_bits)
+            });
 
             // cas
             match self.repr.compare_exchange(current, new_ptr) {
@@ -674,7 +681,8 @@ where
             // cas
             match self.repr.compare_exchange(current, new_addr) {
                 Ok(success_val) => {
-                    let old_ptr_base = success_val.map_addr(|addr| unsafe {NonZero::new_unchecked(addr.get() & !mask)});
+                    let old_ptr_base = success_val
+                        .map_addr(|addr| unsafe { NonZero::new_unchecked(addr.get() & !mask) });
                     let old_pointer = unsafe { P::from_pointee_ptr_and_meta(old_ptr_base, ()) };
                     return Ok(old_pointer);
                 }
@@ -845,7 +853,7 @@ where
     }
 }
 
-unsafe impl<P, F, M,S> Send for FlaggedPtr<P, F, M, S>
+unsafe impl<P, F, M, S> Send for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M> + Send,
     F: FlagMeta + Send,
@@ -854,7 +862,7 @@ where
 {
 }
 
-unsafe impl<P, F, M,S> Sync for FlaggedPtr<P, F, M, S>
+unsafe impl<P, F, M, S> Sync for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M> + Sync,
     F: FlagMeta + Sync,
@@ -1386,11 +1394,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 barrier.wait();
                 for _ in 0..ITERATIONS {
-                    let flag = if i % 2 == 0 {
-                        TestFlag::A
-                    } else {
-                        TestFlag::B
-                    };
+                    let flag = if i % 2 == 0 { TestFlag::A } else { TestFlag::B };
                     ptr.set_flag(flag.into());
                 }
             }));
@@ -1402,7 +1406,7 @@ mod tests {
 
         let final_flag = flagged_ptr.flag();
         assert!(final_flag == TestFlag::A || final_flag == TestFlag::B);
-        
+
         let (ptr, _) = Arc::try_unwrap(flagged_ptr).unwrap().dissolve();
         assert_eq!(*ptr, 0);
     }
@@ -1436,9 +1440,9 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let (final_ptr, final_flag): (Box<usize>, BitFlags<TestFlag>) = Arc::try_unwrap(flagged_ptr).unwrap().dissolve();
+        let (final_ptr, final_flag): (Box<usize>, BitFlags<TestFlag>) =
+            Arc::try_unwrap(flagged_ptr).unwrap().dissolve();
         assert!(*final_ptr < THREADS);
         assert_eq!(final_flag, TestFlag::A);
     }
-
 }
