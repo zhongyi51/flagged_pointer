@@ -14,7 +14,7 @@ A safe Rust abstraction for creating tagged pointers that store additional flag 
 ### Basic Example
 
 ```rust
-use flagged_pointer::FlaggedPtr;
+use flagged_pointer::alias::FlaggedBox;
 use enumflags2::{bitflags, BitFlags};
 
 #[bitflags]
@@ -26,7 +26,7 @@ enum Color {
 }
 
 let boxed = Box::new("hello world");
-let mut flagged = FlaggedPtr::new(boxed, BitFlags::from(Color::Red));
+let mut flagged = FlaggedBox::new(boxed, BitFlags::from(Color::Red));
 
 assert_eq!(*flagged, "hello world");
 assert_eq!(flagged.flag(), BitFlags::from(Color::Red));

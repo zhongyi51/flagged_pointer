@@ -398,6 +398,8 @@ where
 
     /// Consumes this `FlaggedPtr` and returns the original flags.
     ///
+    /// The stored pointer is dropped with `self`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -512,6 +514,8 @@ where
     }
 
     /// Sets a new pointer for this `FlaggedPtr`, while preserving the current flags.
+    ///
+    /// For owning pointers, the returned old pointer must be handled by the caller.
     ///
     /// # Arguments
     /// - `ptr`: The new pointer to set
@@ -990,16 +994,16 @@ pub mod alias {
     /// A flagged `Arc<dyn Trait>` trait object pointer.
     pub type FlaggedArcDyn<T, F> = FlaggedPtr<Arc<T>, F, WithMaskMeta<T>, NonNull<()>>;
 
-    /// Atomic version for `NonNull<T>` pointer.
+    /// Atomic storage version for `NonNull<T>` pointer.
     pub type FlaggedAtomicNonNull<T, F> = FlaggedPtr<NonNull<T>, F, (), AtomicPtr<()>>;
 
-    /// Atomic version for `Box<T>` pointer.
+    /// Atomic storage version for `Box<T>` pointer.
     pub type FlaggedAtomicBox<T, F> = FlaggedPtr<Box<T>, F, (), AtomicPtr<()>>;
 
-    /// Atomic version for `Rc<T>` pointer.
+    /// Atomic storage version for `Rc<T>` pointer.
     pub type FlaggedAtomicRc<T, F> = FlaggedPtr<Rc<T>, F, (), AtomicPtr<()>>;
 
-    /// Atomic version for `Arc<T>` pointer.
+    /// Atomic storage version for `Arc<T>` pointer.
     pub type FlaggedAtomicArc<T, F> = FlaggedPtr<Arc<T>, F, (), AtomicPtr<()>>;
 }
 
