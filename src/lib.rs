@@ -1033,7 +1033,7 @@ mod tests {
         let flags = TestFlag::A | TestFlag::B;
 
         let mut flagged: FlaggedNonNull<u64, BitFlags<TestFlag>> =
-            FlaggedNonNull::new(raw_ptr, flags.into());
+            FlaggedNonNull::new(raw_ptr, flags);
 
         unsafe {
             assert_eq!(*flagged.as_ptr().as_ref(), 123);
@@ -1073,7 +1073,7 @@ mod tests {
     fn test_nonnull_dangling() {
         let dangling = NonNull::<u64>::dangling();
         let flags = TestFlag::A | TestFlag::C;
-        let flagged = FlaggedNonNull::new(dangling, flags.into());
+        let flagged = FlaggedNonNull::new(dangling, flags);
         assert_eq!(flagged.flag(), flags);
         let (ptr_out, _): (NonNull<u64>, BitFlags<TestFlag>) = flagged.dissolve();
         assert_eq!(ptr_out, dangling);
@@ -1172,17 +1172,14 @@ mod tests {
         }
     }
 
+    type FlaggedTestDynBox = FlaggedBoxDyn<dyn TestDyn, BitFlags<TestFlag, u8>>;
+
     #[test]
     fn test_box_dyn_trait() {
         let instance: Box<dyn TestDyn> = Box::new(DynImpl { val: 100 });
         let flags = TestFlag::C;
 
-        let mut flagged_ptr: FlaggedPtr<
-            Box<dyn TestDyn>,
-            BitFlags<TestFlag, u8>,
-            ptr::ptr_impl::WithMaskMeta<dyn TestDyn>,
-            _,
-        > = FlaggedBoxDyn::new(instance, flags.into());
+        let mut flagged_ptr: FlaggedTestDynBox = FlaggedBoxDyn::new(instance, flags.into());
 
         assert_eq!(flagged_ptr.value(), 100);
         flagged_ptr.set_value(200);
@@ -1267,8 +1264,8 @@ mod tests {
         let data2 = Box::new(100u64);
         let flags = TestFlag::A | TestFlag::C;
 
-        let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data1, flags.into());
-        let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data2, flags.into());
+        let flagged1: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data1, flags);
+        let flagged2: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data2, flags);
 
         let mut hasher1 = DefaultHasher::new();
         let mut hasher2 = DefaultHasher::new();
@@ -1300,8 +1297,7 @@ mod tests {
         let ptr2 = Box::new(&mut data2);
         let flags = TestFlag::A | TestFlag::B;
 
-        let mut flagged: FlaggedBox<&mut u64, BitFlags<TestFlag>> =
-            FlaggedBox::new(ptr1, flags.into());
+        let mut flagged: FlaggedBox<&mut u64, BitFlags<TestFlag>> = FlaggedBox::new(ptr1, flags);
         assert_eq!(**flagged, 10);
 
         let old_ptr = flagged.try_set_pointer(ptr2).unwrap();
@@ -1324,7 +1320,7 @@ mod tests {
     fn test_as_ref_and_as_mut() {
         let data = Box::new(77u64);
         let flags = TestFlag::B | TestFlag::C;
-        let mut flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
+        let mut flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags);
 
         let ref_data = flagged.as_ref();
         assert_eq!(*ref_data, 77);
@@ -1338,8 +1334,7 @@ mod tests {
     fn test_rc_operations() {
         let data = Rc::new(99u64);
         let flags = TestFlag::A | TestFlag::C;
-        let flagged: FlaggedPtr<Rc<u64>, BitFlags<TestFlag>, (), _> =
-            FlaggedRc::new(data, flags.into());
+        let flagged: FlaggedPtr<Rc<u64>, BitFlags<TestFlag>, (), _> = FlaggedRc::new(data, flags);
 
         assert_eq!(*flagged, 99);
         assert_eq!(flagged.flag(), flags);
@@ -1368,7 +1363,7 @@ mod tests {
     fn test_all_flags() {
         let data = Box::new(456u64);
         let flags = TestFlag::A | TestFlag::B | TestFlag::C;
-        let flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags.into());
+        let flagged: FlaggedBox<u64, BitFlags<TestFlag>> = FlaggedBox::new(data, flags);
 
         assert_eq!(flagged.flag(), flags);
         assert_eq!(*flagged, 456);

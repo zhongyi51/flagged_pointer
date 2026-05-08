@@ -76,7 +76,7 @@ where
 pub mod ptr_impl {
     use core::slice;
     use std::{
-        mem,
+        mem::ManuallyDrop,
         ptr::{self, NonNull},
         rc::Rc,
         sync::Arc,
@@ -258,10 +258,8 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *mut T;
-            let boxed = unsafe { Box::from_raw(ptr) };
-            let cloned = boxed.clone();
-            mem::forget(boxed);
-            cloned
+            let boxed = ManuallyDrop::new(unsafe { Box::from_raw(ptr) });
+            Box::clone(&boxed)
         }
     }
 
@@ -298,10 +296,8 @@ pub mod ptr_impl {
         {
             let ptr = nz.as_ptr() as *mut T;
             let slice = unsafe { std::slice::from_raw_parts_mut(ptr, meta) };
-            let boxed = unsafe { Box::from_raw(slice) };
-            let cloned = boxed.clone();
-            mem::forget(boxed);
-            cloned
+            let boxed = ManuallyDrop::new(unsafe { Box::from_raw(slice) });
+            Box::clone(&boxed)
         }
     }
 
@@ -346,11 +342,10 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr();
-            let boxed: Box<T> =
-                unsafe { Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data)) };
-            let cloned = boxed.clone();
-            mem::forget(boxed);
-            cloned
+            let boxed = ManuallyDrop::new(unsafe {
+                Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data))
+            });
+            Box::clone(&boxed)
         }
     }
 
