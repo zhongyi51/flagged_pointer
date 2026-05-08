@@ -147,3 +147,7 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 ### 0.2.1
 - more methods
 - optimize `PointerStorage::set` for atomic pointers
+
+### 0.2.2
+- better doc
+- panic safe for `PtrMeta::clone_storage` method
