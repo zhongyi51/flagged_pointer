@@ -21,9 +21,18 @@ use std::ptr::NonNull;
 /// # Safety
 ///
 /// Implementors must ensure:
-/// 1. `USED_PTR_BITS_MASK` correctly identifies unused bits for the pointer type
-/// 2. `to_pointee_ptr_and_meta` and `from_pointee_ptr_and_meta` are inverse operations
-/// 3. All methods maintain pointer validity and safety invariants
+/// 1. `mask(meta)` is stable for a given metadata value and retains every bit
+///    required to reconstruct an appropriately aligned data pointer. The static
+///    mask must not claim that required pointer bits are available for flags.
+/// 2. `to_pointee_ptr_and_meta` transfers the pointer's ownership, if any, into
+///    the returned representation without invalidating its provenance.
+///    `from_pointee_ptr_and_meta` reverses that transfer exactly once.
+/// 3. `map_pointee` returns the original pointee address and metadata without
+///    taking ownership or invalidating existing references. For `Deref` and
+///    `DerefMut` implementors, this must be the same pointee those traits expose.
+/// 4. Safe conversion methods must accept every valid value of `Self`. In
+///    particular, a `NonNull` pointer need not be dereferenceable or exclusive;
+///    converting it must not create a reference to its pointee.
 ///
 /// # Examples
 ///
@@ -55,22 +64,65 @@ where
     /// Reconstructs the pointer from its raw representation and metadata.
     ///
     /// # Safety
-    /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
+    /// `nz` and `meta` must describe a representation produced by
+    /// `to_pointee_ptr_and_meta`, with the original provenance and all flag bits
+    /// removed. For owning pointers, the caller must transfer the represented
+    /// ownership exactly once and satisfy the pointer type's aliasing rules.
     unsafe fn from_pointee_ptr_and_meta(nz: NonNull<()>, meta: M) -> Self;
 
     /// Maps the raw pointer representation to a `NonNull` pointer to the pointee.
     ///
     /// # Safety
-    /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
+    /// `nz` and `meta` must describe the original data pointer and metadata, with
+    /// the original provenance and all flag bits removed. The implementation
+    /// must not dereference raw pointers merely to reconstruct their metadata.
     unsafe fn map_pointee(nz: NonNull<()>, meta: M) -> NonNull<Self::Pointee>;
 
-    /// Clones the underlying storage for pointer types that support cloning.
+    /// Legacy cloning hook for callers with exclusive access to owned pointees.
+    ///
+    /// Safe shared cloning uses [`ClonePtrMeta::clone_storage_shared`] instead.
+    /// This method is retained for compatibility with existing `PtrMeta`
+    /// implementations; it is not called by `FlaggedPtr::clone`.
     ///
     /// # Safety
-    /// The caller must ensure that `nz` and `meta` are valid for the pointer type.
+    /// `nz` and `meta` must describe a live representation of `Self`, with the
+    /// original provenance and all flag bits removed. For owning pointer types,
+    /// the caller must have exclusive access to the pointee for this call:
+    /// there must be no outstanding references to it, including shared ones.
+    /// The original represented ownership remains with the caller.
     unsafe fn clone_storage(nz: NonNull<()>, meta: M) -> Self
     where
         Self: Clone;
+}
+
+/// Clones pointer storage while preserving shared references to its pointee.
+///
+/// This capability is separate from [`PtrMeta`] because reconstructing an
+/// owning pointer, such as `Box`, can invalidate references even when that
+/// temporary pointer is never dropped. Implementors must clone through shared
+/// access instead. A clone may have a different address or alignment; callers
+/// must validate it before combining it with flags.
+///
+/// # Safety
+///
+/// Implementations must return a valid, independently owned clone (or a copy
+/// for non-owning pointers), leave the original represented ownership intact,
+/// and preserve all existing shared references to the source pointee. These
+/// requirements also apply if cloning panics. Implementations must not create
+/// a temporary exclusive owner of, or a mutable reference to, the source.
+/// The result must uphold `Self::clone`'s guarantees, including the identical
+/// pointee address required when `Self` implements `CloneStableDeref`.
+pub unsafe trait ClonePtrMeta<M: Copy>: PtrMeta<M> + Clone {
+    /// Clones the represented pointer without taking ownership of the source.
+    ///
+    /// # Safety
+    ///
+    /// `nz` and `meta` must describe a representation produced by
+    /// `to_pointee_ptr_and_meta`, with the original provenance and all flag bits
+    /// removed. Its represented ownership must remain live for the call. For
+    /// owning pointers the pointee must permit shared access; non-owning raw
+    /// pointers need not be dereferenceable and must only be copied.
+    unsafe fn clone_storage_shared(nz: NonNull<()>, meta: M) -> Self;
 }
 
 pub mod ptr_impl {
@@ -84,7 +136,7 @@ pub mod ptr_impl {
 
     use ptr_meta::DynMetadata;
 
-    use crate::ptr::PtrMeta;
+    use crate::ptr::{ClonePtrMeta, PtrMeta};
 
     /// Metadata wrapper for dynamic dispatch pointers (trait objects).
     ///
@@ -157,17 +209,12 @@ pub mod ptr_impl {
 
         type Pointee = [T];
 
-        fn to_pointee_ptr_and_meta(mut self) -> (NonNull<()>, usize) {
-            let slice = unsafe { self.as_mut() };
-            let len = slice.len();
-            let ptr = slice.as_mut_ptr();
-            let nz = unsafe { NonNull::new_unchecked(ptr as *mut ()) };
-            (nz, len)
+        fn to_pointee_ptr_and_meta(self) -> (NonNull<()>, usize) {
+            (self.cast(), self.len())
         }
 
         unsafe fn from_pointee_ptr_and_meta(nz: NonNull<()>, meta: usize) -> Self {
-            let slice = unsafe { slice::from_raw_parts_mut(nz.as_ptr() as *mut T, meta) };
-            Self::from_mut(slice)
+            NonNull::slice_from_raw_parts(nz.cast(), meta)
         }
 
         unsafe fn map_pointee(nz: NonNull<()>, meta: usize) -> NonNull<Self::Pointee> {
@@ -281,7 +328,7 @@ pub mod ptr_impl {
 
         unsafe fn from_pointee_ptr_and_meta(nz: NonNull<()>, meta: usize) -> Self {
             let ptr = nz.as_ptr() as *mut T;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, meta) };
+            let slice = ptr::slice_from_raw_parts_mut(ptr, meta);
             unsafe { Box::from_raw(slice) }
         }
 
@@ -295,7 +342,7 @@ pub mod ptr_impl {
             Self: Clone,
         {
             let ptr = nz.as_ptr() as *mut T;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, meta) };
+            let slice = ptr::slice_from_raw_parts_mut(ptr, meta);
             let boxed = ManuallyDrop::new(unsafe { Box::from_raw(slice) });
             Box::clone(&boxed)
         }
@@ -438,7 +485,7 @@ pub mod ptr_impl {
 
         unsafe fn from_pointee_ptr_and_meta(nz: NonNull<()>, meta: usize) -> Self {
             let ptr = nz.as_ptr() as *const T;
-            let slice = unsafe { std::slice::from_raw_parts(ptr, meta) };
+            let slice = ptr::slice_from_raw_parts(ptr, meta);
             unsafe { Rc::from_raw(slice) }
         }
 
@@ -478,7 +525,7 @@ pub mod ptr_impl {
 
         unsafe fn from_pointee_ptr_and_meta(nz: NonNull<()>, meta: usize) -> Self {
             let ptr = nz.as_ptr() as *const T;
-            let slice = unsafe { std::slice::from_raw_parts(ptr, meta) };
+            let slice = ptr::slice_from_raw_parts(ptr, meta);
             unsafe { Arc::from_raw(slice) }
         }
 
@@ -590,6 +637,71 @@ pub mod ptr_impl {
             let fat_ptr = ptr_meta::from_raw_parts_mut(ptr, meta.data);
             unsafe { Arc::increment_strong_count(fat_ptr) };
             unsafe { Arc::from_raw(fat_ptr) }
+        }
+    }
+
+    // SAFETY: A raw pointer clone only copies its address and metadata. It does
+    // not dereference the pointee or transfer any ownership.
+    unsafe impl<T: ?Sized, M: Copy> ClonePtrMeta<M> for NonNull<T>
+    where
+        Self: PtrMeta<M, Pointee = T>,
+    {
+        unsafe fn clone_storage_shared(nz: NonNull<()>, meta: M) -> Self {
+            // SAFETY: The caller provides the original untagged representation.
+            unsafe { Self::map_pointee(nz, meta) }
+        }
+    }
+
+    // SAFETY: Incrementing the reference count creates a distinct owned handle
+    // without requiring exclusive access to the allocation's pointee.
+    unsafe impl<T: ?Sized, M: Copy> ClonePtrMeta<M> for Rc<T>
+    where
+        Self: PtrMeta<M, Pointee = T>,
+    {
+        unsafe fn clone_storage_shared(nz: NonNull<()>, meta: M) -> Self {
+            // SAFETY: The representation came from a live Rc<T>, and map_pointee
+            // restores the original pointee pointer, including any metadata.
+            let ptr = unsafe { Self::map_pointee(nz, meta) }.as_ptr();
+            unsafe {
+                Rc::increment_strong_count(ptr);
+                Rc::from_raw(ptr)
+            }
+        }
+    }
+
+    // SAFETY: As for Rc, with an atomic strong-count increment.
+    unsafe impl<T: ?Sized, M: Copy> ClonePtrMeta<M> for Arc<T>
+    where
+        Self: PtrMeta<M, Pointee = T>,
+    {
+        unsafe fn clone_storage_shared(nz: NonNull<()>, meta: M) -> Self {
+            // SAFETY: The representation came from a live Arc<T>; incrementing
+            // first gives from_raw a new owned reference to consume.
+            let ptr = unsafe { Self::map_pointee(nz, meta) }.as_ptr();
+            unsafe {
+                Arc::increment_strong_count(ptr);
+                Arc::from_raw(ptr)
+            }
+        }
+    }
+
+    // SAFETY: Cloning reads through a shared reference and creates a fresh Box.
+    // If T::clone panics, the original allocation and references remain intact.
+    unsafe impl<T: Clone> ClonePtrMeta<()> for Box<T> {
+        unsafe fn clone_storage_shared(nz: NonNull<()>, _meta: ()) -> Self {
+            // SAFETY: The caller guarantees a live T permitting shared access.
+            Box::new(unsafe { nz.cast::<T>().as_ref() }.clone())
+        }
+    }
+
+    // SAFETY: Slice cloning only borrows the source. Vec handles partial-clone
+    // cleanup on panic, and the returned Box owns a separate allocation.
+    unsafe impl<T: Clone> ClonePtrMeta<usize> for Box<[T]> {
+        unsafe fn clone_storage_shared(nz: NonNull<()>, meta: usize) -> Self {
+            // SAFETY: The caller supplies the original pointer and slice length
+            // and guarantees that all elements permit shared access.
+            let source = unsafe { slice::from_raw_parts(nz.cast::<T>().as_ptr(), meta) };
+            source.to_vec().into_boxed_slice()
         }
     }
 }

@@ -19,7 +19,7 @@ use std::{
 use crate::{
     error::FlaggedPointerError,
     flag::FlagMeta,
-    ptr::PtrMeta,
+    ptr::{ClonePtrMeta, PtrMeta},
     repr_storage::{AtomicPointerStorage, PointerStorage},
 };
 
@@ -28,15 +28,22 @@ pub mod flag;
 pub mod ptr;
 pub mod repr_storage;
 
+type Invariant<T> = PhantomData<fn(T) -> T>;
+
 /// A pointer that stores flags within unused bits of the pointer representation.
 ///
-/// This struct combines a pointer and flag information into a single `usize` value
-/// by utilizing unused bits in the pointer due to alignment requirements.
+/// This struct stores flags in unused pointer address bits while preserving
+/// pointer provenance. Metadata for fat pointers is stored separately.
 ///
 /// # Type Parameters
 /// - `P`: The pointer type (e.g., `Box<T>`, `NonNull<T>`, `Rc<T>`)
 /// - `F`: The flag type (must implement `FlagMeta`)
 /// - `M`: Metadata associated with the pointer
+/// - `S`: Storage for the tagged pointer representation
+///
+/// `P` and `F` are invariant: their lifetimes cannot be shortened through a
+/// shared borrow. This is required because atomic storage supports replacement
+/// through `&self`, and also applies to the non-atomic aliases of this type.
 ///
 /// # Examples
 ///
@@ -122,6 +129,10 @@ where
 
     /// Phantom data to ensure proper variance and ownership semantics.
     _marker: PhantomData<(P, F)>,
+
+    // Atomic storage can replace both P and F through a shared reference.
+    // Keep their lifetimes invariant even though the stored pointer is erased.
+    _invariant: Invariant<(P, F)>,
 }
 
 impl<P, F, M, S> FlaggedPtr<P, F, M, S>
@@ -236,7 +247,7 @@ where
         }
         // We cannot guarantee that the pointer is properly aligned,
         // so we need to check the flag bits against the pointer address.
-        let ptr_addr = ptr.as_ptr() as usize;
+        let ptr_addr = ptr.addr().get();
         if ptr_addr & F::mask() != 0 {
             // allowing drop origin pointer
             let origin_ptr = unsafe { P::from_pointee_ptr_and_meta(ptr, meta) };
@@ -252,6 +263,7 @@ where
             repr: S::new(repr),
             meta,
             _marker: PhantomData,
+            _invariant: PhantomData,
         })
     }
 
@@ -266,6 +278,7 @@ where
             repr: S::new(repr),
             meta,
             _marker: PhantomData,
+            _invariant: PhantomData,
         }
     }
 }
@@ -284,11 +297,7 @@ where
     //
     // The caller must ensure there is no any data race when accessing the pointer.
     fn ptr_repr(&self) -> NonNull<()> {
-        let ptr_val = self
-            .repr
-            .load()
-            .as_ptr()
-            .map_addr(|addr| addr & P::mask(self.meta));
+        let ptr_val = self.repr.load().as_ptr().map_addr(|addr| addr & !F::mask());
         unsafe { NonNull::new_unchecked(ptr_val) }
     }
 
@@ -314,7 +323,7 @@ where
     /// assert_eq!(flagged.flag(), MyFlags::A | MyFlags::B);
     /// ```
     pub fn flag(&self) -> F {
-        let flag_repr = F::mask() & self.repr.load().as_ptr() as usize;
+        let flag_repr = F::mask() & self.repr.load().addr().get();
         // SAFETY: We know the flag bits are valid because they were set by `new`
         // or `set_flag`, both of which ensure the bits are within the valid range
         unsafe { F::from_usize(flag_repr) }
@@ -350,18 +359,15 @@ where
     /// assert_eq!(flags, MyFlags::A | MyFlags::B);
     /// ```
     pub fn dissolve(self) -> (P, F) {
-        let ptr_repr = self.repr.load().as_ptr();
-        let flag_repr = F::mask() & ptr_repr as usize;
-
-        // SAFETY: We know these values are valid because:
-        // 1. The pointer was originally created from a valid P
-        // 2. We've masked out the flag bits, leaving only valid pointer bits
-        // 3. The metadata is preserved from construction
-        let ptr = unsafe { P::from_pointee_ptr_and_meta(self.ptr_repr(), self.meta) };
-        let flag = unsafe { F::from_usize(flag_repr) };
-
-        // Prevent the destructor from running since we're taking ownership
+        // Decode flags before transferring ownership: a user-defined flag
+        // conversion may panic, in which case self still owns the pointer.
+        let flag = self.flag();
+        let ptr_repr = self.ptr_repr();
+        let meta = self.meta;
         mem::forget(self);
+        // SAFETY: The original pointer and metadata have been recovered, and
+        // forgetting self transfers its sole ownership to the reconstructed P.
+        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
         (ptr, flag)
     }
 
@@ -448,10 +454,10 @@ where
     /// ```
     pub fn into_ptr(self) -> P {
         let ptr_repr = self.ptr_repr();
-        let ptr = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, self.meta) };
-        // Prevent the destructor from running since we're taking ownership
+        let meta = self.meta;
+        // Transfer ownership before reconstruction, including on unwinding.
         mem::forget(self);
-        ptr
+        unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) }
     }
 
     /// Comparing internal pointer representations ignoring flags, like `ptr::eq`.
@@ -541,35 +547,10 @@ where
     /// assert_eq!(*flagged.into_ptr(), 456);
     /// ```
     pub fn try_set_pointer(&mut self, ptr: P) -> Result<P, FlaggedPointerError<P>> {
-        let current_flag = self.flag();
-        let (ptr_repr, meta) = ptr.to_pointee_ptr_and_meta();
-
-        if (P::mask(meta) & F::mask()) != 0 {
-            let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
-            return Err(FlaggedPointerError::FlagOverlap {
-                ptr_mask: P::mask(meta),
-                flag_mask: F::mask(),
-                origin_pointer,
-            });
-        }
-
-        let ptr_addr = ptr_repr.as_ptr() as usize;
-        if ptr_addr & F::mask() != 0 {
-            let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, meta) };
-            return Err(FlaggedPointerError::Misalignment {
-                ptr_addr,
-                flag_mask: F::mask(),
-                origin_pointer,
-            });
-        }
-
-        let old_ptr_repr = self.ptr_repr();
-        let old_pointer = unsafe { P::from_pointee_ptr_and_meta(old_ptr_repr, self.meta) };
-
-        self.repr
-            .set(ptr_repr.map_addr(|addr| addr | current_flag.to_usize()));
-        self.meta = meta;
-        Ok(old_pointer)
+        let replacement = Self::try_new(ptr, self.flag())?;
+        // Finish fallible/user-defined conversions before releasing the old
+        // owner, so unwinding cannot leave self pointing at freed storage.
+        Ok(mem::replace(self, replacement).into_ptr())
     }
 }
 
@@ -611,7 +592,7 @@ where
         let mut current = self.repr.load();
 
         loop {
-            let current_addr = current.as_ptr() as usize;
+            let current_addr = current.addr().get();
             let current_flag = unsafe { F::from_usize(current_addr & mask) };
             let new_ptr = current.map_addr(|addr| unsafe {
                 NonZero::new_unchecked(addr.get() & !mask | new_flag_bits)
@@ -662,7 +643,7 @@ where
             });
         }
 
-        let ptr_addr = ptr_repr.as_ptr() as usize;
+        let ptr_addr = ptr_repr.addr().get();
         if ptr_addr & F::mask() != 0 {
             let origin_pointer = unsafe { P::from_pointee_ptr_and_meta(ptr_repr, _meta) };
             return Err(FlaggedPointerError::Misalignment {
@@ -676,7 +657,7 @@ where
         let mask = F::mask();
 
         loop {
-            let current_addr = current.as_ptr() as usize;
+            let current_addr = current.addr().get();
             let current_flag_bits = current_addr & mask;
 
             // prepare new pointer
@@ -771,16 +752,24 @@ where
 
 impl<P, F, M> Clone for FlaggedPtr<P, F, M, NonNull<()>>
 where
-    P: PtrMeta<M> + Clone,
+    P: ClonePtrMeta<M>,
     F: FlagMeta,
     M: Copy,
 {
+    /// Clones the pointer using its shared clone hook and preserves the flags.
+    ///
+    /// # Panics
+    /// Panics if the cloned pointer cannot store the existing flag type, for
+    /// example if a cloned trait object has a smaller dynamic alignment.
     fn clone(&self) -> Self {
         let ptr_repr = self.ptr_repr();
-        let cloned_ptr_storage = unsafe { P::clone_storage(ptr_repr, self.meta) };
+        // SAFETY: self owns a valid pointer, and the shared clone hook must
+        // preserve any outstanding shared references to its pointee.
+        let cloned_ptr_storage = unsafe { P::clone_storage_shared(ptr_repr, self.meta) };
         let flag = self.flag();
-        // the pointer we cloned is from a valid pointer, and the flag bits are not overlapped
-        unsafe { Self::new_unchecked(cloned_ptr_storage, flag) }
+        // A clone of a trait object may have different dynamic alignment.
+        Self::try_new(cloned_ptr_storage, flag)
+            .unwrap_or_else(|error| panic!("FlaggedPtr::clone: {error:?}"))
     }
 }
 
@@ -857,6 +846,8 @@ where
     }
 }
 
+// SAFETY: Moving the wrapper transfers exactly its owned P, F, and metadata.
+// PointerStorage is sealed to NonNull and AtomicPtr; neither stores extra state.
 unsafe impl<P, F, M, S> Send for FlaggedPtr<P, F, M, S>
 where
     P: PtrMeta<M> + Send,
@@ -866,12 +857,23 @@ where
 {
 }
 
-unsafe impl<P, F, M, S> Sync for FlaggedPtr<P, F, M, S>
+// SAFETY: Non-atomic mutation requires &mut self; shared access only exposes
+// operations supported by the Sync pointer, flags, and metadata.
+unsafe impl<P, F, M> Sync for FlaggedPtr<P, F, M, NonNull<()>>
 where
     P: PtrMeta<M> + Sync,
     F: FlagMeta + Sync,
     M: Sync + Copy,
-    S: PointerStorage,
+{
+}
+
+// SAFETY: Atomic replacement can transfer ownership of P and F between
+// threads, so Sync alone is insufficient. The erased representation is atomic.
+unsafe impl<P, F, M> Sync for FlaggedPtr<P, F, M, AtomicPtr<()>>
+where
+    P: PtrMeta<M> + Send + Sync,
+    F: FlagMeta + Send + Sync,
+    M: Sync + Copy,
 {
 }
 
@@ -885,7 +887,7 @@ where
 
 unsafe impl<P, F, M> stable_deref_trait::CloneStableDeref for FlaggedPtr<P, F, M, NonNull<()>>
 where
-    P: PtrMeta<M> + Deref<Target = P::Pointee> + stable_deref_trait::CloneStableDeref,
+    P: ClonePtrMeta<M> + Deref<Target = P::Pointee> + stable_deref_trait::CloneStableDeref,
     F: FlagMeta,
     M: Copy,
 {
@@ -998,6 +1000,52 @@ pub mod alias {
     pub type FlaggedAtomicNonNull<T, F> = FlaggedPtr<NonNull<T>, F, (), AtomicPtr<()>>;
 
     /// Atomic storage version for `Box<T>` pointer.
+    ///
+    /// Replacement through `&self` must not shorten the stored lifetime:
+    ///
+    /// ```compile_fail
+    /// use flagged_pointer::alias::FlaggedAtomicBox;
+    /// use enumflags2::{bitflags, BitFlags};
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Clone, Copy)]
+    /// enum Flag { A = 1 }
+    /// type Flags = BitFlags<Flag>;
+    /// fn replace<'a>(slot: &FlaggedAtomicBox<&'a u64, Flags>, value: &'a u64) {
+    ///     drop(slot.try_set_pointer(Box::new(value)).unwrap());
+    /// }
+    /// static ORIGINAL: u64 = 1;
+    /// let slot: FlaggedAtomicBox<&'static u64, Flags> =
+    ///     FlaggedAtomicBox::new(Box::new(&ORIGINAL), Flags::empty());
+    /// {
+    ///     let local = 2;
+    ///     replace(&slot, &local);
+    /// }
+    /// let value: &'static u64 = *slot.into_ptr();
+    /// ```
+    ///
+    /// Shared replacement transfers ownership, so a `Sync` but non-`Send`
+    /// pointee such as `MutexGuard` cannot be shared through this wrapper:
+    ///
+    /// ```compile_fail
+    /// use flagged_pointer::alias::FlaggedAtomicBox;
+    /// use enumflags2::{bitflags, BitFlags};
+    /// use std::sync::Mutex;
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Clone, Copy)]
+    /// enum Flag { A = 1 }
+    /// let first = Mutex::new(1u64);
+    /// let second = Mutex::new(2u64);
+    /// let slot = FlaggedAtomicBox::new(
+    ///     Box::new(first.lock().unwrap()), BitFlags::<Flag>::empty());
+    /// std::thread::scope(|scope| {
+    ///     scope.spawn(|| {
+    ///         let replacement = Box::new(second.lock().unwrap());
+    ///         drop(slot.try_set_pointer(replacement).unwrap());
+    ///     });
+    /// });
+    /// ```
     pub type FlaggedAtomicBox<T, F> = FlaggedPtr<Box<T>, F, (), AtomicPtr<()>>;
 
     /// Atomic storage version for `Rc<T>` pointer.
@@ -1361,6 +1409,41 @@ mod tests {
 
         assert_eq!(flagged.flag(), flags);
         assert_eq!(*flagged, 123);
+    }
+
+    #[test]
+    fn dissolve_drops_owner_once_if_flag_decoding_panics() {
+        use std::panic::catch_unwind;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Clone, Copy)]
+        struct PanickingFlag;
+
+        // SAFETY: This zero-bit flag has one value and a constant mask. Its
+        // decoding operation deliberately unwinds instead of returning it.
+        unsafe impl FlagMeta for PanickingFlag {
+            const USED_FLAG_BITS_MASK: usize = 0;
+
+            fn to_usize(self) -> usize {
+                0
+            }
+
+            unsafe fn from_usize(_: usize) -> Self {
+                panic!("flag decoding panic");
+            }
+        }
+
+        struct CountDrops(Arc<AtomicUsize>);
+        impl Drop for CountDrops {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let owner = FlaggedBox::new(Box::new(CountDrops(Arc::clone(&drops))), PanickingFlag);
+        assert!(catch_unwind(|| owner.dissolve()).is_err());
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
     #[test]

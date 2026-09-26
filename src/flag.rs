@@ -11,9 +11,13 @@
 /// # Safety
 ///
 /// Implementors must ensure:
-/// 1. usize returned by `mask()` includes all bits that are guaranteed to be unused in pointers, more bits is ok but less bits will cause UB.
-/// 2. `to_usize` and `from_usize` are inverse operations
-/// 3. All possible values of `USED_FLAG_BITS_MASK` are valid for the type
+/// 1. `mask()` is constant for a given flag type and includes every bit that
+///    `to_usize()` can set. Bits outside the mask must always be zero.
+/// 2. `to_usize` and `from_usize` are inverse operations for valid flag values.
+/// 3. `from_usize` accepts every bit pattern contained in `mask()`.
+///
+/// Pointer compatibility is checked by `FlaggedPtr`; the flag mask describes
+/// flags, not the alignment of any particular pointer type.
 ///
 /// # Examples
 ///
@@ -24,7 +28,7 @@
 /// struct MyFlags(u8);
 ///
 /// unsafe impl FlagMeta for MyFlags {
-///     const USED_FLAG_BITS_MASK: usize = 0b111; // Use bottom 3 bits
+///     const USED_FLAG_BITS_MASK: usize = u8::MAX as usize;
 ///     
 ///     fn to_usize(self) -> usize {
 ///         self.0 as usize
