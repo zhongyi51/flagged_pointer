@@ -77,25 +77,11 @@ where
     /// the original provenance and all flag bits removed. The implementation
     /// must not dereference raw pointers merely to reconstruct their metadata.
     unsafe fn map_pointee(nz: NonNull<()>, meta: M) -> NonNull<Self::Pointee>;
-
-    /// Legacy cloning hook for callers with exclusive access to owned pointees.
-    ///
-    /// Safe shared cloning uses [`ClonePtrMeta::clone_storage_shared`] instead.
-    /// This method is retained for compatibility with existing `PtrMeta`
-    /// implementations; it is not called by `FlaggedPtr::clone`.
-    ///
-    /// # Safety
-    /// `nz` and `meta` must describe a live representation of `Self`, with the
-    /// original provenance and all flag bits removed. For owning pointer types,
-    /// the caller must have exclusive access to the pointee for this call:
-    /// there must be no outstanding references to it, including shared ones.
-    /// The original represented ownership remains with the caller.
-    unsafe fn clone_storage(nz: NonNull<()>, meta: M) -> Self
-    where
-        Self: Clone;
 }
 
 /// Clones pointer storage while preserving shared references to its pointee.
+///
+/// This trait clones the represented pointer, not its metadata.
 ///
 /// This capability is separate from [`PtrMeta`] because reconstructing an
 /// owning pointer, such as `Box`, can invalidate references even when that
@@ -128,7 +114,6 @@ pub unsafe trait ClonePtrMeta<M: Copy>: PtrMeta<M> + Clone {
 pub mod ptr_impl {
     use core::slice;
     use std::{
-        mem::ManuallyDrop,
         ptr::{self, NonNull},
         rc::Rc,
         sync::Arc,
@@ -190,14 +175,6 @@ pub mod ptr_impl {
             let ptr = nz.as_ptr() as *mut T;
             unsafe { NonNull::new_unchecked(ptr) }
         }
-
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *mut T;
-            unsafe { NonNull::new_unchecked(ptr) }
-        }
     }
 
     unsafe impl<T> PtrMeta<usize> for NonNull<[T]> {
@@ -218,14 +195,6 @@ pub mod ptr_impl {
         }
 
         unsafe fn map_pointee(nz: NonNull<()>, meta: usize) -> NonNull<Self::Pointee> {
-            let ptr = ptr::slice_from_raw_parts_mut(nz.as_ptr() as *mut T, meta);
-            unsafe { NonNull::new_unchecked(ptr) }
-        }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
-        where
-            Self: Clone,
-        {
             let ptr = ptr::slice_from_raw_parts_mut(nz.as_ptr() as *mut T, meta);
             unsafe { NonNull::new_unchecked(ptr) }
         }
@@ -265,14 +234,6 @@ pub mod ptr_impl {
             let ptr = nz.as_ptr();
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr();
-            unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
-        }
     }
 
     unsafe impl<T> PtrMeta<()> for Box<T> {
@@ -298,15 +259,6 @@ pub mod ptr_impl {
         unsafe fn map_pointee(nz: NonNull<()>, _meta: ()) -> NonNull<Self::Pointee> {
             let ptr = nz.as_ptr() as *mut T;
             unsafe { NonNull::new_unchecked(ptr) }
-        }
-
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *mut T;
-            let boxed = ManuallyDrop::new(unsafe { Box::from_raw(ptr) });
-            Box::clone(&boxed)
         }
     }
 
@@ -335,16 +287,6 @@ pub mod ptr_impl {
         unsafe fn map_pointee(nz: NonNull<()>, meta: usize) -> NonNull<Self::Pointee> {
             let ptr = ptr::slice_from_raw_parts_mut(nz.as_ptr() as *mut T, meta);
             unsafe { NonNull::new_unchecked(ptr) }
-        }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *mut T;
-            let slice = ptr::slice_from_raw_parts_mut(ptr, meta);
-            let boxed = ManuallyDrop::new(unsafe { Box::from_raw(slice) });
-            Box::clone(&boxed)
         }
     }
 
@@ -383,17 +325,6 @@ pub mod ptr_impl {
             let ptr = nz.as_ptr();
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr();
-            let boxed = ManuallyDrop::new(unsafe {
-                Box::from_raw(ptr_meta::from_raw_parts_mut(ptr, meta.data))
-            });
-            Box::clone(&boxed)
-        }
     }
 
     unsafe impl<T> PtrMeta<()> for Rc<T> {
@@ -420,15 +351,6 @@ pub mod ptr_impl {
             let ptr = nz.as_ptr() as *mut T;
             unsafe { NonNull::new_unchecked(ptr) }
         }
-
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *mut T;
-            unsafe { Rc::increment_strong_count(ptr) };
-            unsafe { Rc::from_raw(ptr) }
-        }
     }
 
     unsafe impl<T> PtrMeta<()> for Arc<T> {
@@ -454,15 +376,6 @@ pub mod ptr_impl {
         unsafe fn map_pointee(nz: NonNull<()>, _meta: ()) -> NonNull<Self::Pointee> {
             let ptr = nz.as_ptr() as *mut T;
             unsafe { NonNull::new_unchecked(ptr) }
-        }
-
-        unsafe fn clone_storage(nz: NonNull<()>, _meta: ()) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *mut T;
-            unsafe { Arc::increment_strong_count(ptr) };
-            unsafe { Arc::from_raw(ptr) }
         }
     }
 
@@ -494,16 +407,6 @@ pub mod ptr_impl {
             let slice = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
             unsafe { NonNull::new_unchecked(slice) }
         }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *const T;
-            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
-            unsafe { Rc::increment_strong_count(slice_ptr) };
-            unsafe { Rc::from_raw(slice_ptr) }
-        }
     }
 
     unsafe impl<T> PtrMeta<usize> for Arc<[T]> {
@@ -533,16 +436,6 @@ pub mod ptr_impl {
             let ptr = nz.as_ptr() as *const T;
             let slice = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
             unsafe { NonNull::new_unchecked(slice) }
-        }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: usize) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr() as *const T;
-            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr as *mut T, meta);
-            unsafe { Arc::increment_strong_count(slice_ptr) };
-            unsafe { Arc::from_raw(slice_ptr) }
         }
     }
 
@@ -581,16 +474,6 @@ pub mod ptr_impl {
             let ptr = nz.as_ptr();
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
         }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr();
-            let fat_ptr = ptr_meta::from_raw_parts_mut(ptr, meta.data);
-            unsafe { Rc::increment_strong_count(fat_ptr) };
-            unsafe { Rc::from_raw(fat_ptr) }
-        }
     }
 
     unsafe impl<T> PtrMeta<WithMaskMeta<T>> for Arc<T>
@@ -627,16 +510,6 @@ pub mod ptr_impl {
         unsafe fn map_pointee(nz: NonNull<()>, meta: WithMaskMeta<T>) -> NonNull<Self::Pointee> {
             let ptr = nz.as_ptr();
             unsafe { NonNull::new_unchecked(ptr_meta::from_raw_parts_mut(ptr, meta.data)) }
-        }
-
-        unsafe fn clone_storage(nz: NonNull<()>, meta: WithMaskMeta<T>) -> Self
-        where
-            Self: Clone,
-        {
-            let ptr = nz.as_ptr();
-            let fat_ptr = ptr_meta::from_raw_parts_mut(ptr, meta.data);
-            unsafe { Arc::increment_strong_count(fat_ptr) };
-            unsafe { Arc::from_raw(fat_ptr) }
         }
     }
 
