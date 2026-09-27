@@ -1,7 +1,8 @@
 [package]
 name = "flagged_pointer"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
+rust-version = "1.85"
 publish = ["crates-io"]
 description = "A safe abstraction for tagged pointers using unused bits for flags"
 repository = "https://github.com/zhongyi51/flagged_pointer"

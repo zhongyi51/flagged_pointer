@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "flagged_pointer"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "enumflags2",
  "ptr_meta",

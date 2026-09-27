@@ -9,6 +9,11 @@ mod private {
 
 /// A marker trait for atomic pointer storage.
 pub trait AtomicPointerStorage: PointerStorage {
+    /// Atomically replaces `current` with `new`, returning the previous value.
+    ///
+    /// # Panics
+    /// Panics if the observed value is null. An `AtomicPtr` can be constructed
+    /// independently of `FlaggedPtr`, so its non-null invariant is checked.
     fn compare_exchange(
         &self,
         current: NonNull<()>,
@@ -19,7 +24,9 @@ pub trait AtomicPointerStorage: PointerStorage {
 /// A storage trait for flagged pointers' `repr` field.
 pub trait PointerStorage: Sized + private::Sealed {
     fn new(ptr: NonNull<()>) -> Self;
+    /// Loads the stored pointer. Panics if the stored value is null.
     fn load(&self) -> NonNull<()>;
+    /// Replaces the stored pointer. Panics if the previous value is null.
     fn set(&mut self, ptr: NonNull<()>) -> NonNull<()>;
 }
 
@@ -46,12 +53,13 @@ impl PointerStorage for AtomicPtr<()> {
         Self::new(ptr.as_ptr())
     }
     fn load(&self) -> NonNull<()> {
-        unsafe { NonNull::new_unchecked(self.load(Ordering::Acquire)) }
+        NonNull::new(self.load(Ordering::Acquire)).expect("pointer storage must be non-null")
     }
     fn set(&mut self, ptr: NonNull<()>) -> NonNull<()> {
-        let old = *self.get_mut();
-        *self.get_mut() = ptr.as_ptr();
-        unsafe { NonNull::new_unchecked(old) }
+        let storage = self.get_mut();
+        let old = NonNull::new(*storage).expect("pointer storage must be non-null");
+        *storage = ptr.as_ptr();
+        old
     }
 }
 
@@ -69,8 +77,8 @@ impl AtomicPointerStorage for AtomicPtr<()> {
         );
 
         match res {
-            Ok(ptr) => unsafe { Ok(NonNull::new_unchecked(ptr)) },
-            Err(ptr) => unsafe { Err(NonNull::new_unchecked(ptr)) },
+            Ok(ptr) => Ok(NonNull::new(ptr).expect("pointer storage must be non-null")),
+            Err(ptr) => Err(NonNull::new(ptr).expect("pointer storage must be non-null")),
         }
     }
 }
